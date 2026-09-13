@@ -1,0 +1,27 @@
+# Environments
+.env
+.venv/
+env/
+venv/
+ENV/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDEs
+.idea/
+.vscode/
+
+# Machine Learning / Data
+*.pt
+*.pth
+*.onnx
+datasets/
+data/
+logs/
+
+# OS generated files
+.DS_Store
+Thumbs.db
