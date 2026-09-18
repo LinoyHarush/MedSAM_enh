@@ -12,16 +12,26 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Preprocess 2D RGB datasets with bbox annotations (JSON or per-image CSV) into MedSAM npz."
     )
-    parser.add_argument("-img_path", type=str, required=True, help="Path to RGB images.")
-    parser.add_argument("-gt_path", type=str, required=True, help="Path to masks.")
+    parser.add_argument("-img_path", type=str, default=None, help="Path to RGB images (single-folder mode).")
+    parser.add_argument("-gt_path", type=str, default=None, help="Path to masks (single-folder mode).")
     parser.add_argument("-output_path", type=str, default="data/npz", help="Output root path.")
     parser.add_argument("-modality", type=str, default="RGB", help="Prefix modality.")
     parser.add_argument("-anatomy", type=str, default="Dataset", help="Prefix anatomy/dataset name.")
     parser.add_argument("-img_name_suffix", type=str, default=".jpg", help="Image suffix.")
     parser.add_argument("-gt_name_suffix", type=str, default=".png", help="Mask suffix.")
     parser.add_argument("-bbox_format", type=str, choices=["json", "csv_dir", "mask"], required=True)
-    parser.add_argument("-bbox_json", type=str, default=None, help="Path to JSON bbox annotation.")
-    parser.add_argument("-bbox_csv_dir", type=str, default=None, help="Path to dir with per-image csv bbox files.")
+    parser.add_argument("-bbox_json", type=str, default=None, help="Path to JSON bbox annotation (single-folder mode).")
+    parser.add_argument("-bbox_csv_dir", type=str, default=None, help="Path to dir with per-image csv bbox files (single-folder mode).")
+    parser.add_argument("-train_img_path", type=str, default=None, help="Path to train images.")
+    parser.add_argument("-train_gt_path", type=str, default=None, help="Path to train masks.")
+    parser.add_argument("-train_bbox_format", type=str, choices=["json", "csv_dir", "mask"], default=None)
+    parser.add_argument("-train_bbox_json", type=str, default=None, help="Path to train JSON bbox annotation.")
+    parser.add_argument("-train_bbox_csv_dir", type=str, default=None, help="Path to train per-image csv bbox dir.")
+    parser.add_argument("-test_img_path", type=str, default=None, help="Path to test images.")
+    parser.add_argument("-test_gt_path", type=str, default=None, help="Path to test masks.")
+    parser.add_argument("-test_bbox_format", type=str, choices=["json", "csv_dir", "mask"], default=None)
+    parser.add_argument("-test_bbox_json", type=str, default=None, help="Path to test JSON bbox annotation.")
+    parser.add_argument("-test_bbox_csv_dir", type=str, default=None, help="Path to test per-image csv bbox dir.")
     parser.add_argument("-train_ratio", type=float, default=0.8, help="Train split ratio.")
     parser.add_argument("-seed", type=int, default=2024, help="Split seed.")
     parser.add_argument("--binary_mask", action="store_true", help="Convert mask to 0/1.")
@@ -99,28 +109,131 @@ def clip_box(box, w, h):
     return [xmin, ymin, xmax, ymax]
 
 
+def resolve_box_sources(bbox_format, bbox_json, bbox_csv_dir):
+    bbox_json_map = {}
+    bbox_csv = None
+    if bbox_format == "json":
+        if bbox_json is None:
+            raise ValueError("bbox_format=json requires json path")
+        bbox_json_map = read_json_boxes(bbox_json)
+    elif bbox_format == "csv_dir":
+        if bbox_csv_dir is None:
+            raise ValueError("bbox_format=csv_dir requires csv dir path")
+        bbox_csv = Path(bbox_csv_dir)
+    return bbox_json_map, bbox_csv
+
+
+def preprocess_split(split_img_dir, split_gt_dir, split_name, out_root, prefix, binary_mask, bbox_format, bbox_json, bbox_csv_dir):
+    split_dir = out_root / split_name / prefix[:-1]
+    imgs_out = split_dir / "imgs"
+    gts_out = split_dir / "gts"
+    imgs_out.mkdir(parents=True, exist_ok=True)
+    gts_out.mkdir(parents=True, exist_ok=True)
+
+    bbox_json_map, bbox_csv = resolve_box_sources(bbox_format, bbox_json, bbox_csv_dir)
+
+    mask_files = sorted([p for p in split_gt_dir.iterdir() if p.is_file()])
+    valid = []
+    for mp in mask_files:
+        if not mp.name.endswith(args.gt_name_suffix):
+            continue
+        stem = mp.name[: -len(args.gt_name_suffix)]
+        if (split_img_dir / f"{stem}{args.img_name_suffix}").exists():
+            valid.append(stem)
+
+    saved, skipped = 0, 0
+    for stem in tqdm(valid, desc=f"Preprocessing {split_name}"):
+        img = ensure_rgb_uint8(io.imread(split_img_dir / f"{stem}{args.img_name_suffix}"))
+        gt = ensure_mask(io.imread(split_gt_dir / f"{stem}{args.gt_name_suffix}"), binary_mask)
+        h, w = gt.shape[:2]
+
+        if bbox_format == "json":
+            raw_boxes = get_boxes_from_json(stem, bbox_json_map)
+        elif bbox_format == "csv_dir":
+            raw_boxes = get_boxes_from_csv(stem, bbox_csv)
+        else:
+            bm = bbox_from_mask(gt)
+            raw_boxes = [bm] if bm is not None else []
+
+        boxes = []
+        for b in raw_boxes:
+            cb = clip_box(b, w=w, h=h)
+            if cb is not None:
+                boxes.append(cb)
+        if len(boxes) == 0:
+            skipped += 1
+            continue
+
+        np.savez_compressed(
+            imgs_out / f"{prefix}{stem}.npz",
+            imgs=img,
+            boxes=np.array(boxes, dtype=np.int32),
+        )
+        np.savez_compressed(
+            gts_out / f"{prefix}{stem}.npz",
+            gts=gt,
+        )
+        saved += 1
+
+    print(f"[{split_name}] saved {saved} cases, skipped {skipped}.")
+    print(f"[{split_name}] imgs dir: {imgs_out}")
+    print(f"[{split_name}] gts dir: {gts_out}")
+
+
 def main():
     args = parse_args()
-    img_dir = Path(args.img_path)
-    gt_dir = Path(args.gt_path)
     out_root = Path(args.output_path)
     prefix = f"{args.modality}_{args.anatomy}_"
 
-    train_dir = out_root / "MedSAM_train" / prefix[:-1]
-    test_dir = out_root / "MedSAM_test" / prefix[:-1]
-    train_dir.mkdir(parents=True, exist_ok=True)
-    test_dir.mkdir(parents=True, exist_ok=True)
+    explicit_split_mode = all(
+        x is not None
+        for x in [args.train_img_path, args.train_gt_path, args.test_img_path, args.test_gt_path]
+    )
 
-    bbox_json_map = {}
-    bbox_csv_dir = None
-    if args.bbox_format == "json":
-        if args.bbox_json is None:
-            raise ValueError("bbox_format=json requires -bbox_json")
-        bbox_json_map = read_json_boxes(args.bbox_json)
-    elif args.bbox_format == "csv_dir":
-        if args.bbox_csv_dir is None:
-            raise ValueError("bbox_format=csv_dir requires -bbox_csv_dir")
-        bbox_csv_dir = Path(args.bbox_csv_dir)
+    if explicit_split_mode:
+        train_bbox_format = args.train_bbox_format or args.bbox_format
+        test_bbox_format = args.test_bbox_format or args.bbox_format
+        preprocess_split(
+            split_img_dir=Path(args.train_img_path),
+            split_gt_dir=Path(args.train_gt_path),
+            split_name="MedSAM_train",
+            out_root=out_root,
+            prefix=prefix,
+            binary_mask=args.binary_mask,
+            bbox_format=train_bbox_format,
+            bbox_json=args.train_bbox_json or args.bbox_json,
+            bbox_csv_dir=args.train_bbox_csv_dir or args.bbox_csv_dir,
+        )
+        preprocess_split(
+            split_img_dir=Path(args.test_img_path),
+            split_gt_dir=Path(args.test_gt_path),
+            split_name="MedSAM_test",
+            out_root=out_root,
+            prefix=prefix,
+            binary_mask=args.binary_mask,
+            bbox_format=test_bbox_format,
+            bbox_json=args.test_bbox_json or args.bbox_json,
+            bbox_csv_dir=args.test_bbox_csv_dir or args.bbox_csv_dir,
+        )
+        return
+
+    if args.img_path is None or args.gt_path is None:
+        raise ValueError("Single-folder mode requires -img_path and -gt_path")
+
+    img_dir = Path(args.img_path)
+    gt_dir = Path(args.gt_path)
+    bbox_json_map, bbox_csv_dir = resolve_box_sources(args.bbox_format, args.bbox_json, args.bbox_csv_dir)
+
+    train_split_dir = out_root / "MedSAM_train" / prefix[:-1]
+    test_split_dir = out_root / "MedSAM_test" / prefix[:-1]
+    train_imgs_out = train_split_dir / "imgs"
+    train_gts_out = train_split_dir / "gts"
+    test_imgs_out = test_split_dir / "imgs"
+    test_gts_out = test_split_dir / "gts"
+    train_imgs_out.mkdir(parents=True, exist_ok=True)
+    train_gts_out.mkdir(parents=True, exist_ok=True)
+    test_imgs_out.mkdir(parents=True, exist_ok=True)
+    test_gts_out.mkdir(parents=True, exist_ok=True)
 
     mask_files = sorted([p for p in gt_dir.iterdir() if p.is_file() and p.name.endswith(args.gt_name_suffix)])
     valid = []
@@ -136,7 +249,7 @@ def main():
     train_idx = set(idx[:split_idx].tolist())
 
     saved, skipped = 0, 0
-    for i, stem in enumerate(tqdm(valid, desc="Preprocessing RGB dataset")):
+    for i, stem in enumerate(tqdm(valid, desc="Preprocessing single-folder dataset")):
         img = ensure_rgb_uint8(io.imread(img_dir / f"{stem}{args.img_name_suffix}"))
         gt = ensure_mask(io.imread(gt_dir / f"{stem}{args.gt_name_suffix}"), args.binary_mask)
         h, w = gt.shape[:2]
@@ -158,19 +271,27 @@ def main():
             skipped += 1
             continue
 
-        save_dir = train_dir if i in train_idx else test_dir
+        if i in train_idx:
+            imgs_out, gts_out = train_imgs_out, train_gts_out
+        else:
+            imgs_out, gts_out = test_imgs_out, test_gts_out
+
         np.savez_compressed(
-            save_dir / f"{prefix}{stem}.npz",
+            imgs_out / f"{prefix}{stem}.npz",
             imgs=img,
-            gts=gt,
             boxes=np.array(boxes, dtype=np.int32),
+        )
+        np.savez_compressed(
+            gts_out / f"{prefix}{stem}.npz",
+            gts=gt,
         )
         saved += 1
 
-    print(f"Saved {saved} npz files.")
-    print(f"Skipped {skipped} files (missing/invalid boxes).")
-    print(f"Train npz dir: {train_dir}")
-    print(f"Test npz dir: {test_dir}")
+    print(f"Saved {saved} cases. Skipped {skipped} cases.")
+    print(f"Train imgs dir: {train_imgs_out}")
+    print(f"Train gts dir: {train_gts_out}")
+    print(f"Test imgs dir: {test_imgs_out}")
+    print(f"Test gts dir: {test_gts_out}")
 
 
 if __name__ == "__main__":
