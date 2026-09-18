@@ -123,7 +123,19 @@ def resolve_box_sources(bbox_format, bbox_json, bbox_csv_dir):
     return bbox_json_map, bbox_csv
 
 
-def preprocess_split(split_img_dir, split_gt_dir, split_name, out_root, prefix, binary_mask, bbox_format, bbox_json, bbox_csv_dir):
+def preprocess_split(
+    split_img_dir,
+    split_gt_dir,
+    split_name,
+    out_root,
+    prefix,
+    binary_mask,
+    bbox_format,
+    bbox_json,
+    bbox_csv_dir,
+    img_name_suffix,
+    gt_name_suffix,
+):
     split_dir = out_root / split_name / prefix[:-1]
     imgs_out = split_dir / "imgs"
     gts_out = split_dir / "gts"
@@ -135,16 +147,16 @@ def preprocess_split(split_img_dir, split_gt_dir, split_name, out_root, prefix, 
     mask_files = sorted([p for p in split_gt_dir.iterdir() if p.is_file()])
     valid = []
     for mp in mask_files:
-        if not mp.name.endswith(args.gt_name_suffix):
+        if not mp.name.endswith(gt_name_suffix):
             continue
-        stem = mp.name[: -len(args.gt_name_suffix)]
-        if (split_img_dir / f"{stem}{args.img_name_suffix}").exists():
+        stem = mp.name[: -len(gt_name_suffix)]
+        if (split_img_dir / f"{stem}{img_name_suffix}").exists():
             valid.append(stem)
 
     saved, skipped = 0, 0
     for stem in tqdm(valid, desc=f"Preprocessing {split_name}"):
-        img = ensure_rgb_uint8(io.imread(split_img_dir / f"{stem}{args.img_name_suffix}"))
-        gt = ensure_mask(io.imread(split_gt_dir / f"{stem}{args.gt_name_suffix}"), binary_mask)
+        img = ensure_rgb_uint8(io.imread(split_img_dir / f"{stem}{img_name_suffix}"))
+        gt = ensure_mask(io.imread(split_gt_dir / f"{stem}{gt_name_suffix}"), binary_mask)
         h, w = gt.shape[:2]
 
         if bbox_format == "json":
@@ -203,6 +215,8 @@ def main():
             bbox_format=train_bbox_format,
             bbox_json=args.train_bbox_json or args.bbox_json,
             bbox_csv_dir=args.train_bbox_csv_dir or args.bbox_csv_dir,
+            img_name_suffix=args.img_name_suffix,
+            gt_name_suffix=args.gt_name_suffix,
         )
         preprocess_split(
             split_img_dir=Path(args.test_img_path),
@@ -214,6 +228,8 @@ def main():
             bbox_format=test_bbox_format,
             bbox_json=args.test_bbox_json or args.bbox_json,
             bbox_csv_dir=args.test_bbox_csv_dir or args.bbox_csv_dir,
+            img_name_suffix=args.img_name_suffix,
+            gt_name_suffix=args.gt_name_suffix,
         )
         return
 
