@@ -217,7 +217,7 @@ class NpyDataset(Dataset):
         bboxes = np.array([x_min, y_min, x_max, y_max])
         return {
             "image": torch.tensor(img_padded).float(),
-            "gt2D": torch.tensor(gt2D[None, :,:]).long(),
+            "gt2D": torch.tensor(gt2D[None, :,:]).float(),
             "bboxes": torch.tensor(bboxes[None, None, ...]).float(), # (B, 1, 4)
             "image_name": img_name,
             "new_size": torch.tensor(np.array([img_resize.shape[0], img_resize.shape[1]])).long(),
@@ -461,7 +461,7 @@ for epoch in range(start_epoch + 1, num_epochs):
         image, gt2D, boxes = image.to(device), gt2D.to(device), boxes.to(device)
         logits_pred, iou_pred = medsam_lite_model(image, boxes)
         l_seg = seg_loss(logits_pred, gt2D)
-        l_ce = ce_loss(logits_pred, gt2D.float())
+        l_ce = ce_loss(logits_pred, gt2D)
         #mask_loss = l_seg + l_ce
         mask_loss = seg_loss_weight * l_seg + ce_loss_weight * l_ce
         iou_gt = cal_iou(torch.sigmoid(logits_pred) > 0.5, gt2D.bool())
