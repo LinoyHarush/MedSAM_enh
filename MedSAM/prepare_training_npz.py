@@ -1,5 +1,4 @@
 import argparse
-import os
 from pathlib import Path
 
 import numpy as np
@@ -40,11 +39,13 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_npz_key(path: Path, key: str):
-    with np.load(path, allow_pickle=True) as npz:
-        if key not in npz.files:
-            raise KeyError(f"{path} does not contain key '{key}'")
-        return npz[key]
+def read_npz(path: Path):
+    try:
+        with np.load(path, allow_pickle=True) as npz:
+            data = {k: npz[k] for k in npz.files}
+        return data
+    except Exception as e:
+        raise RuntimeError(f"Failed to read {path}. The source .npz may be incomplete or stored on a flaky filesystem: {e}") from e
 
 
 def main():
@@ -68,14 +69,23 @@ def main():
             print(f"Skipping {stem}: no matching GT file found in {gt_dir}")
             continue
 
-        imgs = load_npz_key(img_path, "imgs")
-        gt = load_npz_key(gt_path, "gts")
+        try:
+            img_data = read_npz(img_path)
+            gt_data = read_npz(gt_path)
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            raise
+
+        if "imgs" not in img_data:
+            raise KeyError(f"{img_path} is missing 'imgs' key")
+        if "gts" not in gt_data:
+            raise KeyError(f"{gt_path} is missing 'gts' key")
+
+        obj = {"imgs": img_data["imgs"], "gts": gt_data["gts"]}
+        if "boxes" in img_data:
+            obj["boxes"] = img_data["boxes"]
 
         write_path = out_dir / f"{args.prefix}{stem}.npz"
-        obj = {"imgs": imgs, "gts": gt}
-        if "boxes" in np.load(img_path, allow_pickle=True).files:
-            obj["boxes"] = np.load(img_path, allow_pickle=True)["boxes"]
-
         np.savez_compressed(write_path, **obj)
         count += 1
 

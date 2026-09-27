@@ -84,6 +84,18 @@ parser.add_argument(
     "--sanity_check", action="store_true",
     help="Whether to do sanity check for dataloading."
 )
+parser.add_argument(
+    "--freeze_image_encoder", action="store_true",
+    help="Freeze TinyViT image encoder weights during fine-tuning."
+)
+parser.add_argument(
+    "--freeze_prompt_encoder", action="store_true",
+    help="Freeze prompt encoder weights during fine-tuning."
+)
+parser.add_argument(
+    "--freeze_mask_decoder", action="store_true",
+    help="Freeze mask decoder weights during fine-tuning."
+)
 
 args = parser.parse_args()
 # %%
@@ -102,6 +114,9 @@ seg_loss_weight = args.seg_loss_weight
 ce_loss_weight = args.ce_loss_weight
 do_sancheck = args.sanity_check
 checkpoint = args.resume
+freeze_image_encoder = args.freeze_image_encoder
+freeze_prompt_encoder = args.freeze_prompt_encoder
+freeze_mask_decoder = args.freeze_mask_decoder
 
 makedirs(work_dir, exist_ok=True)
 
@@ -383,11 +398,25 @@ if medsam_lite_checkpoint is not None:
 medsam_lite_model = medsam_lite_model.to(device)
 medsam_lite_model.train()
 
+if freeze_image_encoder:
+    for p in medsam_lite_model.image_encoder.parameters():
+        p.requires_grad = False
+if freeze_prompt_encoder:
+    for p in medsam_lite_model.prompt_encoder.parameters():
+        p.requires_grad = False
+if freeze_mask_decoder:
+    for p in medsam_lite_model.mask_decoder.parameters():
+        p.requires_grad = False
+
+trainable_params = [p for p in medsam_lite_model.parameters() if p.requires_grad]
+if len(trainable_params) == 0:
+    raise ValueError("All model parameters are frozen. Unfreeze at least one module to train.")
+
 # %%
 print(f"MedSAM Lite size: {sum(p.numel() for p in medsam_lite_model.parameters())}")
 # %%
 optimizer = optim.AdamW(
-    medsam_lite_model.parameters(),
+    trainable_params,
     lr=lr,
     betas=(0.9, 0.999),
     eps=1e-08,

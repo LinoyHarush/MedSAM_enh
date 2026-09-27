@@ -107,6 +107,24 @@ python train_one_gpu.py \
     -num_epochs 10
 ```
 
+To fine-tune only the mask decoder (freeze TinyViT image encoder + prompt encoder), add:
+```bash
+python train_one_gpu.py \
+    -data_root data/MedSAM_train \
+    -pretrained_checkpoint lite_medsam.pth \
+    -work_dir work_dir \
+    -num_workers 4 \
+    -batch_size 4 \
+    -num_epochs 10 \
+    --freeze_image_encoder \
+    --freeze_prompt_encoder
+```
+
+Available freezing flags for single-GPU training:
+- `--freeze_image_encoder`
+- `--freeze_prompt_encoder`
+- `--freeze_mask_decoder`
+
 To resume interrupted training from a checkpoint, run:
 ```bash
 python train_one_gpu.py \
@@ -181,4 +199,3 @@ Replace `<YOUR_CHECKPOINT_PATH>` with the path to your saved trained model check
 
 ## Acknowledgements
 We thank the authors of [MobileSAM](https://github.com/ChaoningZhang/MobileSAM) and [TinyViT](https://github.com/microsoft/Cream/tree/main/TinyViT) for making their source code publicly available.
-
