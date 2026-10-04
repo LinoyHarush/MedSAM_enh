@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from datetime import datetime
+from collections import OrderedDict
 
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
 from tiny_vit_sam import TinyViT
@@ -96,6 +97,35 @@ parser.add_argument(
     "--freeze_mask_decoder", action="store_true",
     help="Freeze mask decoder weights during fine-tuning."
 )
+parser.add_argument(
+    "--use_lora", action="store_true",
+    help="Enable LoRA adapters."
+)
+parser.add_argument(
+    "--lora_r", type=int, default=8,
+    help="LoRA rank."
+)
+parser.add_argument(
+    "--lora_alpha", type=float, default=16.0,
+    help="LoRA alpha scaling."
+)
+parser.add_argument(
+    "--lora_dropout", type=float, default=0.0,
+    help="LoRA dropout."
+)
+parser.add_argument(
+    "--lora_targets", type=str, default="q,v",
+    help="Comma-separated targets among q,k,v,o."
+)
+parser.add_argument(
+    "--lora_scope", type=str, default="mask_decoder",
+    choices=["mask_decoder", "image_encoder", "both"],
+    help="Where to apply LoRA adapters."
+)
+parser.add_argument(
+    "--lora_checkpoint", type=str, default=None,
+    help="Path to LoRA adapter checkpoint for loading/resuming adapters."
+)
 
 args = parser.parse_args()
 # %%
@@ -117,8 +147,73 @@ checkpoint = args.resume
 freeze_image_encoder = args.freeze_image_encoder
 freeze_prompt_encoder = args.freeze_prompt_encoder
 freeze_mask_decoder = args.freeze_mask_decoder
+use_lora = args.use_lora
+lora_r = args.lora_r
+lora_alpha = args.lora_alpha
+lora_dropout = args.lora_dropout
+lora_targets = {t.strip().lower() for t in args.lora_targets.split(",") if t.strip()}
+lora_scope = args.lora_scope
+lora_checkpoint = args.lora_checkpoint
 
 makedirs(work_dir, exist_ok=True)
+
+class LoRALinear(nn.Module):
+    def __init__(self, base_linear: nn.Linear, r: int, alpha: float, dropout: float):
+        super().__init__()
+        if r <= 0:
+            raise ValueError("LoRA rank r must be > 0")
+        self.base = base_linear
+        self.r = r
+        self.scaling = alpha / r
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        self.lora_A = nn.Parameter(torch.zeros((r, base_linear.in_features)))
+        self.lora_B = nn.Parameter(torch.zeros((base_linear.out_features, r)))
+        nn.init.kaiming_uniform_(self.lora_A, a=np.sqrt(5))
+        nn.init.zeros_(self.lora_B)
+        for p in self.base.parameters():
+            p.requires_grad = False
+
+    def forward(self, x):
+        base_out = self.base(x)
+        lora_out = self.dropout(x) @ self.lora_A.t() @ self.lora_B.t()
+        return base_out + self.scaling * lora_out
+
+
+def maybe_wrap_with_lora(parent_module, attr_name, target_flag, enabled_targets, r, alpha, dropout):
+    if target_flag not in enabled_targets:
+        return False
+    if not hasattr(parent_module, attr_name):
+        return False
+    layer = getattr(parent_module, attr_name)
+    if isinstance(layer, LoRALinear):
+        return True
+    if isinstance(layer, nn.Linear):
+        setattr(parent_module, attr_name, LoRALinear(layer, r=r, alpha=alpha, dropout=dropout))
+        return True
+    return False
+
+
+def inject_lora_mask_decoder(mask_decoder, enabled_targets, r, alpha, dropout):
+    injected = 0
+    t = mask_decoder.transformer
+    for blk in t.layers:
+        injected += maybe_wrap_with_lora(blk.self_attn, "q_proj", "q", enabled_targets, r, alpha, dropout)
+        injected += maybe_wrap_with_lora(blk.self_attn, "k_proj", "k", enabled_targets, r, alpha, dropout)
+        injected += maybe_wrap_with_lora(blk.self_attn, "v_proj", "v", enabled_targets, r, alpha, dropout)
+        injected += maybe_wrap_with_lora(blk.self_attn, "out_proj", "o", enabled_targets, r, alpha, dropout)
+        injected += maybe_wrap_with_lora(blk.cross_attn_token_to_image, "q_proj", "q", enabled_targets, r, alpha, dropout)
+        injected += maybe_wrap_with_lora(blk.cross_attn_token_to_image, "k_proj", "k", enabled_targets, r, alpha, dropout)
+        injected += maybe_wrap_with_lora(blk.cross_attn_token_to_image, "v_proj", "v", enabled_targets, r, alpha, dropout)
+        injected += maybe_wrap_with_lora(blk.cross_attn_token_to_image, "out_proj", "o", enabled_targets, r, alpha, dropout)
+        injected += maybe_wrap_with_lora(blk.cross_attn_image_to_token, "q_proj", "q", enabled_targets, r, alpha, dropout)
+        injected += maybe_wrap_with_lora(blk.cross_attn_image_to_token, "k_proj", "k", enabled_targets, r, alpha, dropout)
+        injected += maybe_wrap_with_lora(blk.cross_attn_image_to_token, "v_proj", "v", enabled_targets, r, alpha, dropout)
+        injected += maybe_wrap_with_lora(blk.cross_attn_image_to_token, "out_proj", "o", enabled_targets, r, alpha, dropout)
+    injected += maybe_wrap_with_lora(t.final_attn_token_to_image, "q_proj", "q", enabled_targets, r, alpha, dropout)
+    injected += maybe_wrap_with_lora(t.final_attn_token_to_image, "k_proj", "k", enabled_targets, r, alpha, dropout)
+    injected += maybe_wrap_with_lora(t.final_attn_token_to_image, "v_proj", "v", enabled_targets, r, alpha, dropout)
+    injected += maybe_wrap_with_lora(t.final_attn_token_to_image, "out_proj", "o", enabled_targets, r, alpha, dropout)
+    return injected
 
 # %%
 torch.cuda.empty_cache()
@@ -395,6 +490,20 @@ if medsam_lite_checkpoint is not None:
     else:
         print(f"Pretained weights {medsam_lite_checkpoint} not found, training from scratch")
 
+if use_lora:
+    injected_modules = 0
+    if lora_scope in ("mask_decoder", "both"):
+        injected_modules += inject_lora_mask_decoder(
+            medsam_lite_model.mask_decoder, lora_targets, lora_r, lora_alpha, lora_dropout
+        )
+    if lora_scope in ("image_encoder", "both"):
+        print("Warning: image_encoder LoRA injection is not implemented yet in this commit.")
+    if injected_modules == 0:
+        raise ValueError(
+            f"No LoRA modules were injected. Check --lora_scope={lora_scope} and --lora_targets={args.lora_targets}"
+        )
+    print(f"Injected LoRA modules: {injected_modules}")
+
 medsam_lite_model = medsam_lite_model.to(device)
 medsam_lite_model.train()
 
@@ -408,12 +517,34 @@ if freeze_mask_decoder:
     for p in medsam_lite_model.mask_decoder.parameters():
         p.requires_grad = False
 
+if use_lora:
+    for _, p in medsam_lite_model.named_parameters():
+        p.requires_grad = False
+    for name, p in medsam_lite_model.named_parameters():
+        if "lora_A" in name or "lora_B" in name:
+            p.requires_grad = True
+
+if lora_checkpoint:
+    if not use_lora:
+        raise ValueError("--lora_checkpoint was provided but --use_lora is not enabled.")
+    lora_ckpt = torch.load(lora_checkpoint, map_location="cpu")
+    if "lora" in lora_ckpt:
+        lora_state = lora_ckpt["lora"]
+    else:
+        lora_state = lora_ckpt
+    missing, unexpected = medsam_lite_model.load_state_dict(lora_state, strict=False)
+    if unexpected:
+        print(f"Warning: unexpected LoRA keys ignored: {unexpected[:5]} ...")
+    if all("lora_" not in k for k in lora_state.keys()):
+        raise ValueError("Provided LoRA checkpoint does not contain LoRA weights.")
+
 trainable_params = [p for p in medsam_lite_model.parameters() if p.requires_grad]
 if len(trainable_params) == 0:
     raise ValueError("All model parameters are frozen. Unfreeze at least one module to train.")
 
 # %%
 print(f"MedSAM Lite size: {sum(p.numel() for p in medsam_lite_model.parameters())}")
+print(f"Trainable params: {sum(p.numel() for p in medsam_lite_model.parameters() if p.requires_grad)}")
 # %%
 optimizer = optim.AdamW(
     trainable_params,
@@ -487,11 +618,51 @@ for epoch in range(start_epoch + 1, num_epochs):
         "best_loss": best_loss,
     }
     torch.save(checkpoint, join(work_dir, "medsam_lite_latest.pth"))
+    if use_lora:
+        lora_state = OrderedDict(
+            (k, v.detach().cpu()) for k, v in medsam_lite_model.state_dict().items() if "lora_" in k
+        )
+        torch.save(
+            {
+                "lora": lora_state,
+                "epoch": epoch,
+                "loss": epoch_loss_reduced,
+                "best_loss": best_loss,
+                "config": {
+                    "lora_r": lora_r,
+                    "lora_alpha": lora_alpha,
+                    "lora_dropout": lora_dropout,
+                    "lora_targets": sorted(list(lora_targets)),
+                    "lora_scope": lora_scope,
+                },
+            },
+            join(work_dir, "medsam_lite_lora_latest.pth"),
+        )
     if epoch_loss_reduced < best_loss:
         print(f"New best loss: {best_loss:.4f} -> {epoch_loss_reduced:.4f}")
         best_loss = epoch_loss_reduced
         checkpoint["best_loss"] = best_loss
         torch.save(checkpoint, join(work_dir, "medsam_lite_best.pth"))
+        if use_lora:
+            lora_state = OrderedDict(
+                (k, v.detach().cpu()) for k, v in medsam_lite_model.state_dict().items() if "lora_" in k
+            )
+            torch.save(
+                {
+                    "lora": lora_state,
+                    "epoch": epoch,
+                    "loss": epoch_loss_reduced,
+                    "best_loss": best_loss,
+                    "config": {
+                        "lora_r": lora_r,
+                        "lora_alpha": lora_alpha,
+                        "lora_dropout": lora_dropout,
+                        "lora_targets": sorted(list(lora_targets)),
+                        "lora_scope": lora_scope,
+                    },
+                },
+                join(work_dir, "medsam_lite_lora_best.pth"),
+            )
 
     epoch_loss_reduced = 1e10
     # %% plot loss
