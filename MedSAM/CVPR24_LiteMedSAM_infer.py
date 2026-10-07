@@ -61,7 +61,7 @@ parser.add_argument(
 )
 parser.add_argument(
     '--save_overlay',
-    default=True,
+    default=False,
     action='store_true',
     help='whether to save the overlay image'
 )
