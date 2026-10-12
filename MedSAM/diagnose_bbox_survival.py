@@ -212,7 +212,6 @@ def process_npz_file(npz_path, args, summary, rows, vis_dir):
 def process_npy_pair(img_path, gt_path, args, summary, rows, vis_dir):
     img = np.load(img_path, allow_pickle=True)
     gt = np.load(gt_path, allow_pickle=True)
-
     if gt.ndim == 3:
         gt = gt[..., 0]
     gt = np.asarray(gt, dtype=np.uint8)
@@ -238,6 +237,8 @@ def process_npy_pair(img_path, gt_path, args, summary, rows, vis_dir):
 
         status = "valid"
         reason = "valid"
+        fg_orig = 0
+        fg_256 = 0
 
         if bbox_area(box_256) <= 0:
             status = "invalid"
