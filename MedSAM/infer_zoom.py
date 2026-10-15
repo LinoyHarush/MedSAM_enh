@@ -21,9 +21,12 @@ Outputs in -o:
 Self-check: with -reference_dir pointing at B0's predictions (segs_og_ckpt), every photo whose crops all equal
 the whole photo must give exactly B0's mask. The script reports how many such photos match.
 
+Step 4 decision (2026-10-15): zoom passed the pre-set rule for photos with a long side above 2,000 px only,
+so use -zoom_above 2000 for every run from now on.
+
 Usage (from MedSAM/):
   python infer_zoom.py -i <test_dir>/imgs -o <test_dir>/segs_zoom_z1 \
-      -lite_medsam_checkpoint_path work_dir/LiteMedSAM/lite_medsam.pth -reference_dir <test_dir>/segs_og_ckpt
+      -lite_medsam_checkpoint_path work_dir/LiteMedSAM/lite_medsam.pth -reference_dir <test_dir>/segs_og_ckpt -zoom_above 2000
 """
 import argparse
 import csv
@@ -138,6 +141,9 @@ def main():
     ap.add_argument("-device", default="cpu")
     ap.add_argument("-margin", type=float, default=0.5, help="Context on each side of the box, as a fraction of the box side.")
     ap.add_argument("-min_crop", type=int, default=256, help="Smallest crop side in original pixels (256 = never enlarge).")
+    ap.add_argument("-zoom_above", type=int, default=0,
+                    help="Only crop photos whose long side is above this many px; others are segmented exactly like B0 "
+                         "(whole photo). 0 = crop every photo. Step 4 decision (2026-10-15): 2000.")
     ap.add_argument("-reference_dir", default=None, help="B0 predictions (segs_og_ckpt) for the self-check.")
     args = ap.parse_args()
 
@@ -160,8 +166,12 @@ def main():
         H, W = img.shape[:2]
         segs = np.zeros((H, W), dtype=np.uint8)
         all_whole = True
+        zoom_this = max(H, W) > args.zoom_above
         for idx, box in enumerate(boxes, start=1):
-            x0, y0, cw, ch = crop_window(box, H, W, args.margin, args.min_crop)
+            if zoom_this:
+                x0, y0, cw, ch = crop_window(box, H, W, args.margin, args.min_crop)
+            else:
+                x0, y0, cw, ch = 0, 0, W, H          # whole photo = exactly the B0 pipeline
             whole = (x0, y0, cw, ch) == (0, 0, W, H)
             all_whole &= whole
             crop = img[y0:y0 + ch, x0:x0 + cw]
