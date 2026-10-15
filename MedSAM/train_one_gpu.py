@@ -157,63 +157,8 @@ lora_checkpoint = args.lora_checkpoint
 
 makedirs(work_dir, exist_ok=True)
 
-class LoRALinear(nn.Module):
-    def __init__(self, base_linear: nn.Linear, r: int, alpha: float, dropout: float):
-        super().__init__()
-        if r <= 0:
-            raise ValueError("LoRA rank r must be > 0")
-        self.base = base_linear
-        self.r = r
-        self.scaling = alpha / r
-        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
-        self.lora_A = nn.Parameter(torch.zeros((r, base_linear.in_features)))
-        self.lora_B = nn.Parameter(torch.zeros((base_linear.out_features, r)))
-        nn.init.kaiming_uniform_(self.lora_A, a=np.sqrt(5))
-        nn.init.zeros_(self.lora_B)
-        for p in self.base.parameters():
-            p.requires_grad = False
-
-    def forward(self, x):
-        base_out = self.base(x)
-        lora_out = self.dropout(x) @ self.lora_A.t() @ self.lora_B.t()
-        return base_out + self.scaling * lora_out
-
-
-def maybe_wrap_with_lora(parent_module, attr_name, target_flag, enabled_targets, r, alpha, dropout):
-    if target_flag not in enabled_targets:
-        return False
-    if not hasattr(parent_module, attr_name):
-        return False
-    layer = getattr(parent_module, attr_name)
-    if isinstance(layer, LoRALinear):
-        return True
-    if isinstance(layer, nn.Linear):
-        setattr(parent_module, attr_name, LoRALinear(layer, r=r, alpha=alpha, dropout=dropout))
-        return True
-    return False
-
-
-def inject_lora_mask_decoder(mask_decoder, enabled_targets, r, alpha, dropout):
-    injected = 0
-    t = mask_decoder.transformer
-    for blk in t.layers:
-        injected += maybe_wrap_with_lora(blk.self_attn, "q_proj", "q", enabled_targets, r, alpha, dropout)
-        injected += maybe_wrap_with_lora(blk.self_attn, "k_proj", "k", enabled_targets, r, alpha, dropout)
-        injected += maybe_wrap_with_lora(blk.self_attn, "v_proj", "v", enabled_targets, r, alpha, dropout)
-        injected += maybe_wrap_with_lora(blk.self_attn, "out_proj", "o", enabled_targets, r, alpha, dropout)
-        injected += maybe_wrap_with_lora(blk.cross_attn_token_to_image, "q_proj", "q", enabled_targets, r, alpha, dropout)
-        injected += maybe_wrap_with_lora(blk.cross_attn_token_to_image, "k_proj", "k", enabled_targets, r, alpha, dropout)
-        injected += maybe_wrap_with_lora(blk.cross_attn_token_to_image, "v_proj", "v", enabled_targets, r, alpha, dropout)
-        injected += maybe_wrap_with_lora(blk.cross_attn_token_to_image, "out_proj", "o", enabled_targets, r, alpha, dropout)
-        injected += maybe_wrap_with_lora(blk.cross_attn_image_to_token, "q_proj", "q", enabled_targets, r, alpha, dropout)
-        injected += maybe_wrap_with_lora(blk.cross_attn_image_to_token, "k_proj", "k", enabled_targets, r, alpha, dropout)
-        injected += maybe_wrap_with_lora(blk.cross_attn_image_to_token, "v_proj", "v", enabled_targets, r, alpha, dropout)
-        injected += maybe_wrap_with_lora(blk.cross_attn_image_to_token, "out_proj", "o", enabled_targets, r, alpha, dropout)
-    injected += maybe_wrap_with_lora(t.final_attn_token_to_image, "q_proj", "q", enabled_targets, r, alpha, dropout)
-    injected += maybe_wrap_with_lora(t.final_attn_token_to_image, "k_proj", "k", enabled_targets, r, alpha, dropout)
-    injected += maybe_wrap_with_lora(t.final_attn_token_to_image, "v_proj", "v", enabled_targets, r, alpha, dropout)
-    injected += maybe_wrap_with_lora(t.final_attn_token_to_image, "out_proj", "o", enabled_targets, r, alpha, dropout)
-    return injected
+# LoRA code moved to lora.py (shared with train_one_gpu_multibox.py); behaviour unchanged.
+from lora import LoRALinear, maybe_wrap_with_lora, inject_lora_mask_decoder
 
 # %%
 torch.cuda.empty_cache()

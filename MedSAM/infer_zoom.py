@@ -24,6 +24,9 @@ the whole photo must give exactly B0's mask. The script reports how many such ph
 Step 4 decision (2026-10-15): zoom passed the pre-set rule for photos with a long side above 2,000 px only,
 so use -zoom_above 2000 for every run from now on.
 
+Robustness test E1: -box_perturb 0.1 (or 0.2) loosens and shifts every box the same way for every method;
+-zoom_above 100000 runs the B0 pipeline (whole photo) through this same script, so B0 and Z see identical boxes.
+
 Usage (from MedSAM/):
   python infer_zoom.py -i <test_dir>/imgs -o <test_dir>/segs_zoom_z1 \
       -lite_medsam_checkpoint_path work_dir/LiteMedSAM/lite_medsam.pth -reference_dir <test_dir>/segs_og_ckpt -zoom_above 2000
@@ -62,6 +65,21 @@ def crop_window(box, H, W, margin=0.5, min_crop=256):
     x0 = min(x0, max(0, x1)); y0 = min(y0, max(0, y1))
     x0 = max(x0, min(W - cw, x2 - cw)); y0 = max(y0, min(H - ch, y2 - ch))
     return x0, y0, cw, ch
+
+
+def perturb_box(box, H, W, frac, seed, name, idx):
+    """Looser, slightly shifted box (robustness test E1): every side moves out by frac x the box size and the
+    whole box shifts by up to frac/2 x its size. Same seed + photo + box -> same result for every method."""
+    import zlib
+    rng = np.random.default_rng([seed, zlib.crc32(name.encode()), idx])
+    x1, y1, x2, y2 = [float(v) for v in box]
+    w, h = max(x2 - x1, 1.0), max(y2 - y1, 1.0)
+    dx, dy = rng.uniform(-frac / 2, frac / 2) * w, rng.uniform(-frac / 2, frac / 2) * h
+    nx1, nx2 = x1 - frac * w + dx, x2 + frac * w + dx
+    ny1, ny2 = y1 - frac * h + dy, y2 + frac * h + dy
+    nx1, ny1 = int(round(max(0, nx1))), int(round(max(0, ny1)))
+    nx2, ny2 = int(round(min(W - 1, nx2))), int(round(min(H - 1, ny2)))
+    return [nx1, ny1, max(nx2, nx1 + 1), max(ny2, ny1 + 1)]
 
 
 def box_in_crop_256(box, x0, y0, cw, ch):
@@ -144,6 +162,10 @@ def main():
     ap.add_argument("-zoom_above", type=int, default=0,
                     help="Only crop photos whose long side is above this many px; others are segmented exactly like B0 "
                          "(whole photo). 0 = crop every photo. Step 4 decision (2026-10-15): 2000.")
+    ap.add_argument("-box_perturb", type=float, default=0.0,
+                    help="Robustness test E1: loosen every box by this fraction of its size per side (e.g. 0.1, 0.2) "
+                         "and shift it by up to half that. 0 = boxes as given.")
+    ap.add_argument("-perturb_seed", type=int, default=0, help="Seed for -box_perturb; keep it the same for every method.")
     ap.add_argument("-reference_dir", default=None, help="B0 predictions (segs_og_ckpt) for the self-check.")
     args = ap.parse_args()
 
@@ -168,6 +190,8 @@ def main():
         all_whole = True
         zoom_this = max(H, W) > args.zoom_above
         for idx, box in enumerate(boxes, start=1):
+            if args.box_perturb > 0:
+                box = perturb_box(box, H, W, args.box_perturb, args.perturb_seed, name, idx)
             if zoom_this:
                 x0, y0, cw, ch = crop_window(box, H, W, args.margin, args.min_crop)
             else:
@@ -179,12 +203,13 @@ def main():
             segs[y0:y0 + ch, x0:x0 + cw][mask > 0] = idx
             box_rows.append({"case": name, "box_idx": idx, "img_h": H, "img_w": W,
                              "crop_x0": x0, "crop_y0": y0, "crop_w": cw, "crop_h": ch,
+                             "box_x1": int(box[0]), "box_y1": int(box[1]), "box_x2": int(box[2]), "box_y2": int(box[3]),
                              "zoom_vs_today": round(max(H, W) / max(cw, ch), 3),
                              "whole_photo": whole, "pred_iou": round(iou, 4)})
         np.savez_compressed(join(args.output_dir, name), segs=segs)
         eff_rows.append({"case": name, "time": round(time() - t0, 4)})
 
-        if args.reference_dir and all_whole:
+        if args.reference_dir and all_whole and args.box_perturb == 0:
             ref = join(args.reference_dir, name)
             if isfile(ref):
                 whole_photo_cases += 1
