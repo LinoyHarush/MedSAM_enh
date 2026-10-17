@@ -247,7 +247,7 @@ All training runs use the rewritten `train_one_gpu_multibox.py`: one sample per 
 |---|---|---|---|
 | 0 | ✅ Z on validation (inference only), done 2026-10-17: DSC 0.820 / NSD 0.889 | The reference all runs are compared with | – |
 | 0b | ✅ **Done 2026-10-17 (keep crops; train with `-bbox_shift_frac 0.2`).** **E1 box robustness** on validation (inference only): B0 and Z with boxes loosened by 10% and 20% per side (`infer_zoom.py -box_perturb`, seed 0) | Can change two training settings before any GPU time is spent: whether to train on crops, and how much box jitter to train with (added 2026-10-15) | Rules below |
-| 1 | Trial: 2 epochs, 20 photos, frozen encoders | Catches bugs in minutes; measures seconds per epoch for planning | All checks in the brief pass |
+| 1 | ✅ **Done 2026-10-17, all checks passed.** Trial: 2 epochs, 20 photos, frozen encoders (+ resume to epoch 2, + 1 epoch LoRA both, + export/infer_zoom/eval_run chain). Full data: train 1,278 lesion samples (638 from crops), val 149 (69 from crops), **0 skipped**. Trainable: frozen 4,058,340; LoRA both 106,496 (24 LoRA layers merged on export). Encoder BN change 0 throughout. Speed (T4): ~1.5–2 min/epoch frozen, ~15% more for LoRA both. Trial model on validation: DSC 0.800 / NSD 0.888 (plumbing check only). | Catches bugs in minutes; measures seconds per epoch for planning | All checks in the brief pass |
 | 2 | R2 seed 0 | Best earlier setup; first answer to "does training add anything on top of zoom?" | – |
 | 3 | R3 seed 0 | The project's parameter-efficient method | – |
 | 4 | R6 seed 0 | Encoder adaptation: the most promising untested idea | – |
@@ -256,6 +256,8 @@ All training runs use the rewritten `train_one_gpu_multibox.py`: one sample per 
 | 7 | R7 seed 0 | Only if R6 beats R3: shows the gain comes from the encoder | If R6 > R3 |
 | 8 | E2 final test + Wilcoxon, boxes as given (main) and 20% looser (robustness), every model | The reported result; uses the test set once | Always, last on our data |
 | 9 | E3 AlphaDent | External validity | If time allows |
+
+**Split between us (2026-10-17):** steps 2–9 are divided between Shelly and Linoy, with all Colab cells, in `Shelly_Training.md` (R2, R6, seeds 1 and 2 of the chosen methods, E2; the larger share) and `Linoy_Training.md` (R3, R1, R7 if R6 > R3, E3). Colab helpers (train, score, save, compare, board) live in `MedSAM/colab_runs.py`. Results are shared through `board()`, which rebuilds the table from the per-run folders on Drive; `runs_summary.csv` on Drive is no longer updated; `board()` saves the shared table as `experiments/dental_caries_val42/board.csv`.
 
 Skipped under a tight schedule: the learning-rate and rank sweeps (R4, R5, R8) and the training-on-whole-photos ablation (R9). E1 was moved into this list (step 0b) on 2026-10-15.
 
@@ -289,6 +291,8 @@ Skipped under a tight schedule: the learning-rate and rank sweeps (R4, R5, R8) a
 | Inside the trainer (best epoch, early stopping, learning rate) | ✅ only | ❌ | A run needs one criterion, and it should be the main task. |
 | Scoring a finished run on validation (choosing between runs, e.g. R6 vs R3) | ✅ decides | ✅ reported, does not decide | Decisions on the main task; the loose-box score shows early whether training jitter helps. |
 | Final test E2 (63 photos), every model incl. B0 and Z | ✅ main result | ✅ robustness result | Same seeded boxes for all models, so both comparisons are fair. Nothing is tuned on the loose-box score. |
+
+**Scoring order matters:** run `infer_zoom.py` into `segs_<run_name>` first, then `eval_run.py --run_name <run_name>`. eval_run skips its own inference when all 42 predictions exist; if they don't, it runs the old whole-photo inference instead of zoom. For the loose-box score, write `infer_zoom.py -box_perturb 0.2 -perturb_seed 0` output to `segs_<run_name>_p20` and score it with `--run_name <run_name>_p20` (same naming as E1's `Z_p20` / `B0_p20`).
 
 Training jitter is part of each method, like the flips; it is never mirrored on the test boxes for one model only. If R2 falls clearly below Z on the boxes as given, compare it with the same run at `-bbox_shift_frac 0` to see whether the jitter cost something.
 
