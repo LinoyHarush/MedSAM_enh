@@ -72,7 +72,13 @@ def main():
     raw = torch.load(args.ckpt, map_location="cpu")
     state = unwrap(raw)
     if isinstance(raw, dict) and "epoch" in raw:
-        print(f"Checkpoint epoch: {raw['epoch']}  loss: {raw.get('loss', 'n/a')}")
+        if "best_val_epoch" in raw:   # train_one_gpu_multibox.py checkpoints (2026-10-15 on)
+            vd = raw.get("val_dice")
+            print(f"Checkpoint from epoch {raw['epoch'] - 1} (best val Dice {raw['best_val_dice']:.4f} at epoch "
+                  f"{raw['best_val_epoch']}; this epoch: train loss {raw.get('train_loss', float('nan')):.4f}, "
+                  f"val Dice {'n/a' if vd is None else f'{vd:.4f}'})")
+        else:                          # older trainers
+            print(f"Checkpoint epoch: {raw['epoch']}  loss: {raw.get('loss', 'n/a')}")
 
     if any(k.endswith(".lora_A") for k in state):
         alpha, src = args.lora_alpha, "--lora_alpha"
