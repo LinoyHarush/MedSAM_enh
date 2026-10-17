@@ -57,20 +57,23 @@ Run names never repeat between the two of you, so two sessions saving at the sam
 
 **S0 — GPU runtime.** Runtime → Change runtime type → **T4 GPU**. Training on CPU is not an option.
 
-**S1 — mount Drive, pull the repo, copy the code**
+**Before S1, run the notebook's two usual setup cells**, as at the start of every session:
+1. the **daily setup cell** (mounts Drive, pulls the repo with your own `GITHUB_PAT`);
+2. the **`pip install -e .` cell**. A fresh runtime doesn't have the trainer's dependencies (e.g. `monai`), so this is needed every time the runtime is new.
+
+The git identity cell (your name for commits) is only needed if you commit from Colab.
+
+**S1 — copy the code and the model to the runtime's disk, check the GPU**
 ```python
-from google.colab import drive
-drive.mount("/content/drive")
 %cd /content
 REPO_D = "/content/drive/MyDrive/Deep_Learning_Course/MedSAM/MedSAM_enh"   # the only line to edit if the shared folder sits elsewhere in your Drive
-!git -C "{REPO_D}" pull
 !mkdir -p /content/code/MedSAM /content/work/data /content/work/experiments /content/train_ready_npz /content/runs
 !rsync -a --exclude='work_dir' --exclude='__pycache__' "{REPO_D}/MedSAM/" /content/code/MedSAM/
-!grep -c "bbox_shift_frac" /content/code/MedSAM/train_one_gpu_multibox.py
+!grep -c "def board" /content/code/MedSAM/colab_runs.py
 !cp "{REPO_D}/MedSAM/work_dir/LiteMedSAM/lite_medsam.pth" /content/lite_medsam.pth
 import torch; print("GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "NONE - switch the runtime to GPU")
 ```
-Expect a `grep` count above 0 and `GPU: Tesla T4`.
+Expect `1` from `grep` (the daily setup cell pulled the new `colab_runs.py`; a `0` or "No such file" means it didn't) and `GPU: Tesla T4`.
 
 **S2 — load the helpers and copy the data to the runtime's disk**
 ```python
@@ -81,7 +84,7 @@ cr.copy_data()                   # retries and reconnects Drive by itself if the
 ```
 Expect `train npz: 414 (expect 414) | val npz: 42 (expect 42)`.
 
-**What the helpers in `MedSAM/colab_runs.py` do** (read the file for details; both of you run the same version, pulled from git in S1):
+**What the helpers in `MedSAM/colab_runs.py` do** (read the file for details; both of you run the same version, pulled from git by the daily setup cell):
 
 | Function | What it does |
 |---|---|
@@ -92,7 +95,7 @@ Expect `train npz: 414 (expect 414) | val npz: 42 (expect 42)`.
 | `cr.board()` | the shared results table from Drive, also saved as `board.csv` |
 | `cr.sync(src, dst)` | `rsync` that reconnects Drive and retries if the mount drops |
 
-**If the runtime resets** (disconnect, idle timeout, usage limit): everything on the runtime's disk is gone. Run S0–S2 again, then restart the experiment you were on from its **Train** cell. A run is safe only after its **Save** cell has finished.
+**If the runtime resets** (disconnect, idle timeout, usage limit): everything on the runtime's disk is gone. Run the daily setup and pip cells and S0–S2 again, then restart the experiment you were on from its **Train** cell. A run is safe only after its **Save** cell has finished.
 
 ## Experiment 1 — R3 seed 0 (LoRA decoder q,v)
 
