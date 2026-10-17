@@ -1,31 +1,38 @@
 # Shelly's Training
 
-Shelly's half of the training experiments of **run list B** (review file `MedSAM_enh_repo_review.md`, section 10b), in the order to run them, with every Colab cell needed. Linoy's half is in `Linoy_Training.md`. Written 2026-10-17, after the trial run passed (list B step 1).
+Round 2 of the training runs (plan agreed 2026-10-17, after all seed-0 runs). Linoy's part is in `Linoy_Training.md`. The seed-0 results and the reasoning are in the review file, section 10b.
 
-## Who runs what
+## Where we are
+
+Seed 0 is done for R1, R2, R3, R6 and R7 (validation DSC 0.862 / 0.846 / 0.824 / 0.853 / 0.859; Z 0.820). Adapting the image encoder is what helps: R1 (full fine-tuning) and R7 (LoRA on the encoder only) lead.
+
+## The plan from here (fixed before anyone looks at test results)
+
+1. **Seeds 1 and 2 for R7 and R1.** Shelly trains seed 1 of each, Linoy seed 2 of each.
+2. **R7 extension, only if R7 caps out on both new seeds,** i.e. R7_s1 and R7_s2 both train all 20 epochs without early stopping, like R7_s0 did. Then the best of R7_s0 / s1 / s2 by validation DSC (boxes as given, from the board) continues from its best checkpoint for up to 20 more epochs, once, as a new run `R7_s<k>_ext`. Shelly runs it. If only one of the two caps out, send Claude the board and decide together.
+3. **Test set:** the five seed-0 models are scored now (Step A). Every run of this round is scored on test too, whatever it shows (Step E). No choice from here on uses test numbers.
 
 | Order | Shelly (this file) | Linoy (`Linoy_Training.md`) |
 |---|---|---|
-| 1 | **R2 seed 0**: frozen encoders, full decoder (~30 min) | **R3 seed 0**: LoRA decoder q,v (~40 min) |
-| 2 | **R6 seed 0**: LoRA encoder + decoder (~45 min) | **R1 seed 0**: full fine-tuning (~40 min) |
-| 3 | ⏸ **Decision 1**: which method(s) get more seeds (needs R2, R3, R6 seed 0 on the board) | – |
-| 4 | **Seeds 1 and 2** of the chosen method(s): 2 runs, or 4 if two methods qualify | **R7 seed 0**: LoRA encoder only, *only if R6_s0 > R3_s0* |
-| 5 | ⏸ **Decision 2**: which models go to the final test | – |
-| 6 | **E2 final test** (63 photos) | E3 AlphaDent, if time allows |
+| 0 | One-time backup of the results folders | – |
+| A | Test set: B0, Z and the five seed-0 models | – |
+| 1 | **R7 seed 1** (~70 min) | **R7 seed 2** (~70 min) |
+| 2 | **R1 seed 1** (~25 min) | **R1 seed 2** (~25 min) |
+| 3 | R7 extension, if both new R7 seeds cap out (~70 min at most) | – |
+| E | Test set: the new runs, and the final tables | – |
 
-Shelly has the larger share (4–6 training runs plus E2; Linoy 2–3 runs), since she has more time.
+Times include about 5 minutes of data preparation and scoring per run.
 
-Times are rough upper bounds on a T4 (early stopping usually ends runs sooner), plus about 2 min of data preparation and about 3 min of scoring per run.
+## Safety: how earlier results are protected
 
-## Rules for both of us
-
-- **Trainer defaults decide the training settings.** Epoch cap, patience and learning rate come from the run type (full model 10/3/5e-5; frozen encoders 15/4/5e-5; LoRA 20/5/1e-4); box jitter is a random 0–20% of the box size per side. Don't pass extra flags.
-- **Every run is scored the same way:** zoom inference above 2,000 px with the boxes as given (`<run>`, decides) and with the same seeded 20% looser boxes (`<run>_p20`, reported, never decides). The `score()` helper does both, and always runs `infer_zoom` before `eval_run`.
-- **Run names:** `<method>_s<seed>`, e.g. `R2_s0`. Same names on Drive for checkpoints (`MedSAM/work_dir/runs/`), experiments and predictions, so the two of you never overwrite each other.
-- **Save only your own run** with `save()`. Never rsync the whole `experiments` folder back: its `runs_summary.csv` would overwrite the other person's rows. `board()` rebuilds the table from the per-run folders on Drive.
-- **The 63 test photos are used once**, in E2, after every decision is made.
-- After each experiment, send Claude (through Shelly) the "Done. Best validation Dice … at epoch …" line and the output of `compare()`.
-
+Everything already on Drive (R1_s0, R2_s0, R3_s0, R6_s0, R7_s0, Z, B0, the E1 runs, `board.csv`) must stay exactly as it is.
+1. **Every new run has a new name.** Shelly trains seed **1**, Linoy seed **2**; nobody trains seed 0 again. The extension gets its own name, `R7_s<k>_ext`.
+2. **The script refuses to overwrite.** `cr.train`, `cr.extend` and `cr.save` stop with an error if the name already exists on Drive. If you see that error, the seed or name is wrong: fix it, don't force it. `overwrite=True` is only for finishing an interrupted save of *your own* run in the *same* session (see "If the runtime resets").
+3. **Only `cr.save` writes to Drive**, and only the run's own folders. Never `rsync` or copy whole folders (`experiments`, `runs`, `data`) back to Drive, and never delete or rename anything on Drive by hand. The one file that is rewritten on purpose is `board.csv`, which is rebuilt from all runs each time.
+4. **Don't re-run old cells** (the trial run, the first R2 cells, or cells from earlier messages): they don't have these checks.
+5. **The extension never touches the original run.** It copies the chosen seed's folder from Drive to the runtime, continues training there, and saves as `R7_s<k>_ext`.
+6. **Git:** pull before you push, and only Shelly edits the md files and `colab_runs.py`, so the two of you never push conflicting versions.
+7. **One-time backup (Shelly, Step 0).** Before anything else, a copy of the results folders is made on Drive.
 
 ## The board, and why the two of you never overwrite each other
 
@@ -93,107 +100,157 @@ Expect `train npz: 414 (expect 414) | val npz: 42 (expect 42)`.
 | `cr.compare(run)` | per-photo comparison with Z, all / large / small photos, as given and 20% looser |
 | `cr.board()` | the shared results table from Drive, also saved as `board.csv` |
 | `cr.sync(src, dst)` | `rsync` that reconnects Drive and retries if the mount drops |
+| `cr.guard(name)` | stops with an error if anything named `name` already exists on Drive. `train`, `extend` and `save` call it for you |
+| `cr.capped(run)` | `True` if the run trained to its epoch cap without early stopping (read from its log on Drive) |
+| `cr.extend(run)` | continues `run` from its best checkpoint for up to 20 more epochs as a **new** run `<run>_ext`; the original is only read |
+| `cr.copy_test_data(runs)` / `cr.test_table(runs)` | for the test set: copy the test photos and checkpoints; the comparison table vs Z and B0 |
 
 **If the runtime resets** (disconnect, idle timeout, usage limit): everything on the runtime's disk is gone. Run the daily setup and pip cells and S0–S2 again, then restart the experiment you were on from its **Train** cell. A run is safe only after its **Save** cell has finished.
+- Reset **during training or scoring**: nothing reached Drive, so just start that experiment again from its Train cell.
+- A save **stopped with an error but the runtime is still alive** (e.g. Drive gave up): run the same save again with `overwrite=True`, e.g. `cr.save(run, overwrite=True)`. That's the only case for `overwrite=True`.
+- Reset **in the middle of a save**: part of the run is on Drive and the Train cell will now refuse to start, by design. Don't delete anything yourself; tell Shelly, who checks with Claude.
 
-## Experiment 1 — R2 seed 0 (frozen encoders, full decoder)
+**Test-set sessions** (Shelly's Step A and Step E) don't need the training data: in S2 run only the first three lines, without `cr.copy_data()`.
 
-**R2 · Train**
+## Step 0 — one-time backup (run once, before anything else)
+
+Copies the current scores and checkpoints to a folder **outside** the git repo, so nothing can be lost even by mistake.
 ```python
-run = cr.train("R2", 0)
+import os
+BK = "/content/drive/MyDrive/Deep_Learning_Course/MedSAM/results_backup_2026-10-17"   # outside the repo
+assert not os.path.exists(BK), "The backup already exists: don't run this cell twice"
+cr.sync(f"{REPO_D}/experiments", f"{BK}/")
+cr.sync(f"{REPO_D}/MedSAM/work_dir/runs", f"{BK}/")
+print(sorted(os.listdir(BK)), "\n", sorted(os.listdir(f"{BK}/runs")))
 ```
-Check at the top of the output: `Run type: frozen encoders -> num_epochs 15, patience 4, lr 5e-05`, `trainable: 4,058,340`, the two jitter lines, `train: 414 photos -> 1278 lesion samples`, `validation: 42 photos -> 149 lesion samples`, and `encoder BN change 0.00e+00` on every epoch.
+Expect `experiments` and `runs` in the backup, and the five `R*_s0` folders plus their `_infer.pth` files in `runs`. Never write into this folder afterwards.
 
-**R2 · Score, save, compare with Z**
+## Step A — test set: B0, Z and the five seed-0 models
+
+A test-set session: in S2 skip `cr.copy_data()`.
+
+**A1 · Copy the test photos and the five checkpoints**
 ```python
-run = "R2_s0"
-cr.score(run, cr.infer_ckpt(run))
-cr.save(run)
-cr.compare(run)
+TS = cr.TEST                                            # "dental_caries_test63"
+RUNS0 = ["R1_s0", "R2_s0", "R3_s0", "R6_s0", "R7_s0"]
+cr.copy_test_data(RUNS0)
 ```
+Expect `test photos: 63` and `B0 on test already scored (og_ckpt): True` (B0 with boxes as given was scored on 2026-10-14 and is reused).
 
-## Experiment 2 — R6 seed 0 (LoRA encoder qkv + decoder q,v)
-
-**R6 · Train**
+**A2 · The references: Z (as given and 20% looser) and B0 with 20% looser boxes**
 ```python
-run = cr.train("R6", 0)
-```
-Check: `Run type: LoRA -> num_epochs 20, patience 5, lr 0.0001`, `LoRA layers: decoder 14, encoder 10`, `trainable: 106,496`, `encoder BN change 0.00e+00`, and after training `Merged 24 LoRA modules`.
-
-**R6 · Score, save, compare with Z**
-```python
-run = "R6_s0"
-cr.score(run, cr.infer_ckpt(run))
-cr.save(run)
-cr.compare(run)
-cr.board()          # shows Linoy's runs too, once she has saved them
-```
-
-## Decision 1: which method gets seeds 1 and 2 (when R2_s0, R3_s0 and R6_s0 are all on the board)
-```python
-cr.board()
-```
-- **Seeds go to the best of R2_s0 / R3_s0 / R6_s0** by validation DSC with the boxes as given (the `DSC` column), **and to any other of the three within 0.03 of it**. Differences below about 0.03 are noise on 42 photos, so a close runner-up needs its own seeds before we can call it worse.
-- Shelly runs seeds 1 and 2 of every method chosen.
-- **R7 gate** (for Linoy): R7 runs only if R6_s0's DSC is higher than R3_s0's. Tell Linoy which way it went.
-- Shelly sends the board to Claude and we confirm the choice together before any seed run starts. R1 isn't part of this choice (list B keeps it as the upper-bound check); if R1 comes out clearly best, we discuss it then.
-
-## Experiment 3 — seeds 1 and 2 of the chosen method(s)
-
-**Seeds · Train, score, save** (2 runs per method, about 1–1.5 h per method. If the runtime resets, remove the runs already on the board from `TODO` and run the cell again)
-```python
-SEED_METHODS = ["R?"]          # from Decision 1, e.g. ["R6"] or ["R6", "R2"]
-TODO = [(m, s) for m in SEED_METHODS for s in (1, 2)]
-for mth, seed in TODO:
-    run = cr.train(mth, seed)
-    cr.score(run, cr.infer_ckpt(run))
-    cr.save(run)
-    cr.compare(run)
-cr.board()
-```
-
-## Decision 2: which models go to the final test (when all seed runs, and Linoy's R1 and R7, are on the board)
-```python
-cr.board()
-```
-Decision 1 picked which methods deserve 3 seeds; Decision 2 picks, from those, which ones we report on the 63 test photos. It's the last choice made on validation, because the test set may only be used once.
-- **Final method** = the method with the highest validation DSC averaged over its 3 seeds (boxes as given). One seed can be lucky; the 3-seed mean is the fair comparison.
-- **A runner-up** whose 3-seed mean is within 0.03 goes into E2 as well, so the test can show whether the two really differ.
-- E2 always includes **B0 and Z** as references, so `FINAL` in E2a only lists the trained runs.
-- Send the board to Claude and we fix the list together **before** E2 runs. After E2, nothing is changed or re-chosen.
-
-## Experiment 4 — E2 final test (63 test photos, used once)
-
-**E2a · Copy the test data and the final checkpoints**
-```python
-TS = cr.TEST                                       # "dental_caries_test63"
-FINAL = {"R?": ["R?_s0", "R?_s1", "R?_s2"]}        # from Decision 2; add a second method if a runner-up qualifies
-cr.copy_test_data([r for runs in FINAL.values() for r in runs])
-```
-Expect `test photos: 63` and `B0 on test already scored (og_ckpt): True`.
-
-**E2b · The two references on test: Z, and B0 with 20% looser boxes**
-```python
-cr.score("Z", cr.OG, ds=TS)                                            # Z and Z_p20
-cr.score("B0", cr.OG, ds=TS, zoom_above=100000, variants=("p20",))     # B0_p20; B0 with boxes as given = og_ckpt (scored 2026-10-14)
+cr.score("Z", cr.OG, ds=TS)
+cr.score("B0", cr.OG, ds=TS, zoom_above=100000, variants=("p20",))   # whole photo, as B0
 cr.save("Z", TS, trained=False)
 cr.save("B0", TS, trained=False, variants=("p20",))
 ```
 
-**E2c · The final models on test**
+**A3 · The five models** (about 1 min each)
 ```python
-for runs in FINAL.values():
-    for r in runs:
-        cr.score(r, cr.infer_ckpt(r), ds=TS)
-        cr.save(r, TS, trained=False)
+for r in RUNS0:
+    cr.score(r, cr.infer_ckpt(r), ds=TS)
+    cr.save(r, TS, trained=False)
 ```
 
-**E2d · Results: per seed against Z and B0, then the mean over seeds**
+**A4 · The comparison table** (every model vs Z and vs B0; saved to Drive)
 ```python
-for runs in FINAL.values():
-    for r in runs:
-        cr.compare(r, "Z", "Z_p20", ds=TS)
-        cr.compare(r, "og_ckpt", "B0_p20", ds=TS)
-cr.final_table(FINAL)
+t0 = cr.test_table(RUNS0, out_name="test_comparison_seed0.csv")
 ```
-Send Claude the full output of E2d. This is the reported result.
+Columns: per-photo comparison of each model with Z and with B0, with the boxes as given and 20% looser. **Wilcoxon p (Holm)** is the paired test corrected for comparing five models with the same reference: report that one. Send Claude the table.
+
+Optional, large vs small photos per model:
+```python
+for r in RUNS0:
+    cr.compare(r, "Z", "Z_p20", ds=TS)
+```
+
+## Step 1 — R7 seed 1 (LoRA on the encoder only)
+
+A training session: run S2 in full, including `cr.copy_data()`.
+
+**R7_s1 · Train** (~65 min)
+```python
+run = cr.train("R7", 1)
+```
+Check: `Run type: LoRA -> num_epochs 20, patience 5, lr 0.0001`, `LoRA layers: decoder 0, encoder 10`, `trainable: 59,392`, `encoder BN change 0.00e+00`, and after training `Merged 10 LoRA modules`.
+
+**R7_s1 · Score, save, compare with Z**
+```python
+run = "R7_s1"
+cr.score(run, cr.infer_ckpt(run))
+cr.save(run)
+cr.compare(run)
+cr.board()
+```
+
+## Step 2 — R1 seed 1 (full fine-tuning)
+
+Same session is fine if the runtime is still alive (no need to re-run S2).
+
+**R1_s1 · Train** (~25 min)
+```python
+run = cr.train("R1", 1)
+```
+Check: `Run type: full model -> num_epochs 10, patience 3, lr 5e-05`, `trainable: 9,791,300`, and `No LoRA weights found; exporting model weights as-is`. Here `encoder BN change` above 0 is expected.
+
+**R1_s1 · Score, save, compare with Z**
+```python
+run = "R1_s1"
+cr.score(run, cr.infer_ckpt(run))
+cr.save(run)
+cr.compare(run)
+cr.board()
+```
+
+## Step 3 — R7 extension (only if both new R7 seeds cap out)
+
+Wait until Linoy's R7_s2 is on the board.
+
+**3a · Check the rule**
+```python
+b = cr.board()
+caps = {r: cr.capped(r) for r in ["R7_s1", "R7_s2"]}
+r7 = b[b.run.isin(["R7_s0", "R7_s1", "R7_s2"])].sort_values("DSC", ascending=False)
+print("\nCapped:", caps)
+print("Best R7 seed by validation DSC:", r7.run.iloc[0])
+print("RUN THE EXTENSION" if all(caps.values()) else
+      "Don't extend" if not any(caps.values()) else "Only one capped: send Claude the board first")
+```
+
+**3b · The extension** (only if 3a says RUN THE EXTENSION; up to ~70 min)
+```python
+BEST = "R7_s?"                  # the "Best R7 seed" printed by 3a
+ext = cr.extend(BEST)           # new run BEST_ext; the original folder is only read
+```
+Check: `Resumed from ...: continuing at epoch N`, where N is the best epoch + 1; the run stops at epoch N + 19 at the latest, or earlier if validation Dice doesn't improve for 5 epochs.
+
+**3c · Score, save, compare**
+```python
+cr.score(ext, cr.infer_ckpt(ext))
+cr.save(ext)
+cr.compare(ext)
+cr.board()
+```
+
+## Step E — test set: the new runs, and the final tables (when all runs of this round are on the board)
+
+A test-set session (skip `cr.copy_data()` in S2).
+
+**E1 · Score the new runs on test**
+```python
+TS = cr.TEST
+NEW = ["R7_s1", "R7_s2", "R1_s1", "R1_s2"]          # add "R7_s?_ext" if Step 3 ran
+cr.copy_test_data(NEW)
+for r in NEW:
+    cr.score(r, cr.infer_ckpt(r), ds=TS)
+    cr.save(r, TS, trained=False)
+```
+(Z, B0 and the seed-0 models are already scored from Step A: `cr.copy_test_data` brings their scores from Drive, so they're reused, not redone.)
+
+**E2 · The final tables**
+```python
+cr.final_table({"R1": ["R1_s0", "R1_s1", "R1_s2"], "R7": ["R7_s0", "R7_s1", "R7_s2"]})
+t = cr.test_table(["R1_s0", "R1_s1", "R1_s2", "R7_s0", "R7_s1", "R7_s2"] + [r for r in NEW if r.endswith("_ext")],
+                  out_name="test_comparison_final.csv")
+```
+`final_table` gives the mean ± sd over the 3 seeds of R1 and R7 (the main result); `test_table` gives every seed against Z and B0. If the extension ran, report it as its own row ("best R7 seed, trained longer"), not as R7's average. Send Claude both tables.

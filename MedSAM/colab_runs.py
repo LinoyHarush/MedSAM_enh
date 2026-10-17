@@ -107,9 +107,31 @@ def infer_ckpt(run):
     return f"/content/runs/{run}_infer.pth"
 
 
+def on_drive(name, ds=VAL):
+    """Drive paths that already hold results named <name> (checkpoints, scores, predictions)."""
+    T = f"{REPO_D}/data/{ds}/MedSAM_test/RGB_Teeth"
+    paths = [f"{RUNS_D}/{name}", f"{RUNS_D}/{name}_infer.pth"]
+    for n in (name, f"{name}_p20"):
+        paths += [f"{REPO_D}/experiments/{ds}/{n}", f"{T}/segs_{n}"]
+    return [p for p in paths if os.path.exists(p)]
+
+
+def guard(name, ds=VAL, overwrite=False):
+    """Refuse to create a run whose name already exists on Drive, so earlier results are never overwritten."""
+    found = on_drive(name, ds)
+    if found and not overwrite:
+        raise RuntimeError(f"'{name}' already exists on Drive, refusing to overwrite it:\n  " + "\n  ".join(found) +
+                           "\nCheck the run name / seed. Pass overwrite=True only to finish a save of THIS session's run "
+                           "that was interrupted.")
+
+
 def train(method, seed):
-    """Train one run on the runtime's disk and export its inference checkpoint. Epochs/patience/lr: trainer defaults."""
+    """Train one run on the runtime's disk and export its inference checkpoint. Epochs/patience/lr: trainer defaults.
+    Refuses to start if a run with this name already exists on Drive."""
     run = f"{method}_s{seed}"
+    guard(run)
+    if os.path.exists(f"/content/runs/{run}"):
+        raise RuntimeError(f"/content/runs/{run} already exists on this runtime; restart the runtime or pick another seed")
     sh(f"cd {CODE} && python train_one_gpu_multibox.py -train_npz_dir {TR} -val_npz_dir {VA} "
        f"-pretrained_checkpoint {OG} -work_dir /content/runs/{run} -seed {seed} {FLAGS[method]}")
     ck = f"/content/runs/{run}/medsam_lite_multibox_best_val.pth"
@@ -135,9 +157,22 @@ def score(name, inf, ds=VAL, zoom_above=2000, variants=("given", "p20")):
         sh(f"cd {CODE} && python eval_run.py --run_name {n} --ckpt {inf} --repo /content/work --dataset {ds}")
 
 
-def save(name, ds=VAL, trained=True, variants=("given", "p20")):
-    """Copy ONE run back to Drive: checkpoints (if trained), its experiments folders, its predictions."""
+def save(name, ds=VAL, trained=True, variants=("given", "p20"), overwrite=False):
+    """Copy ONE run back to Drive: checkpoints (if trained), its experiments folders, its predictions.
+    Refuses if the scores of <name> on <ds> are already on Drive (pass overwrite=True only to finish an interrupted
+    save of this session's run). Checkpoints of a trained run are always checked too."""
     T = f"/content/work/data/{ds}/MedSAM_test/RGB_Teeth"
+    if not overwrite:
+        found = []
+        for v in variants:
+            n = name if v == "given" else f"{name}_p20"
+            found += [p for p in (f"{REPO_D}/experiments/{ds}/{n}", f"{REPO_D}/data/{ds}/MedSAM_test/RGB_Teeth/segs_{n}")
+                      if os.path.exists(p)]
+        if trained:
+            found += [p for p in (f"{RUNS_D}/{name}", f"{RUNS_D}/{name}_infer.pth") if os.path.exists(p)]
+        if found:
+            raise RuntimeError(f"Results for '{name}' already on Drive, refusing to overwrite:\n  " + "\n  ".join(sorted(set(found))) +
+                               "\nPass overwrite=True only if this is THIS session's run and an earlier save was interrupted.")
     if trained:
         sync(f"/content/runs/{name}", f"{RUNS_D}/", extra=["--exclude=medsam_lite_multibox_latest.pth"])
         sync(infer_ckpt(name), f"{RUNS_D}/")
@@ -171,7 +206,7 @@ def board(ds=VAL):
     z, zp = load("Z", ds, root), load("Z_p20", ds, root)
     rows = [{"run": "Z", "DSC": z.dsc.mean(), "NSD": z.nsd.mean(), "DSC_p20": zp.dsc.mean()}]
     for d in sorted(os.listdir(f"{root}/{ds}")):
-        if not re.fullmatch(r"R\d+_s\d+", d) or load(d, ds, root) is None:
+        if not re.fullmatch(r"R\d+_s\d+(_ext)?", d) or load(d, ds, root) is None:
             continue
         a, ap = load(d, ds, root), load(f"{d}_p20", ds, root)
         m = a.merge(z, on="case", suffixes=("", "_z"))
@@ -202,5 +237,71 @@ def final_table(final, ds=TEST):
             rows.append({"model": f"{mth} ({label}), mean of {len(runs)} seeds", "DSC": np.mean(d),
                          "DSC sd": np.std(d, ddof=1), "NSD": np.mean(n), "NSD sd": np.std(n, ddof=1)})
     df = pd.DataFrame(rows).round(4)
+    display(df)
+    return df
+
+
+def capped(run):
+    """True if <run> trained up to its epoch cap without early stopping (read from its log on Drive)."""
+    log = pd.read_csv(f"{RUNS_D}/{run}/log.csv")
+    cap = 20 if FLAGS[run.split("_")[0]].startswith("--use_lora") else (15 if "freeze" in FLAGS[run.split("_")[0]] else 10)
+    best = int(log.val_dice.idxmax())
+    print(f"{run}: {len(log)} epochs (cap {cap}), best val Dice {log.val_dice.max():.4f} at epoch {int(log.epoch[best])}")
+    return len(log) >= cap
+
+
+def extend(run, extra=20):
+    """Continue <run> from its BEST checkpoint for up to `extra` more epochs (same lr, same patience), as a NEW run
+    <run>_ext. The original run's folders are only read, never written."""
+    import torch
+    new = f"{run}_ext"
+    guard(new)
+    method, seed = run.split("_")[0], int(run.split("_s")[1])
+    sync(f"{RUNS_D}/{run}/", f"/content/runs/{new}/")      # Drive -> runtime copy; the Drive original is untouched
+    ck = f"/content/runs/{new}/medsam_lite_multibox_best_val.pth"
+    nxt = int(torch.load(ck, map_location="cpu", weights_only=False)["epoch"])   # = best epoch + 1
+    log = pd.read_csv(f"/content/runs/{new}/log.csv")
+    log[log.epoch < nxt].to_csv(f"/content/runs/{new}/log.csv", index=False)   # history up to the best epoch
+    print(f"Extending {run} from its best epoch {nxt - 1}: epochs {nxt}..{nxt + extra - 1} at most, into {new}")
+    sh(f"cd {CODE} && python train_one_gpu_multibox.py -train_npz_dir {TR} -val_npz_dir {VA} "
+       f"-pretrained_checkpoint {OG} -work_dir /content/runs/{new} -seed {seed} {FLAGS[method]} "
+       f"-resume {ck} -num_epochs {nxt + extra}")
+    sh(f"cd {CODE} && python export_infer_ckpt.py -ckpt {ck} -out {infer_ckpt(new)}")
+    return new
+
+
+def holm(p):
+    """Holm-adjusted p-values (several models compared with the same reference)."""
+    import numpy as np
+    p = np.asarray(p, float); adj = np.empty(len(p)); top = 0.0
+    for i, k in enumerate(np.argsort(p)):
+        top = max(top, min(1.0, (len(p) - i) * p[k])); adj[k] = top
+    return adj
+
+
+def test_table(runs, ds=TEST, out_name=None):
+    """Every run vs Z and vs B0, boxes as given and 20% looser: DSC, NSD, wins/losses, sign test, Wilcoxon (+ Holm).
+    B0 as given = og_ckpt (scored 2026-10-14). Saved to experiments/<ds>/<out_name> on Drive if out_name is given."""
+    ref = {("Z", ""): "Z", ("Z", "_p20"): "Z_p20", ("B0", ""): "og_ckpt", ("B0", "_p20"): "B0_p20"}
+    rows = []
+    for r in runs:
+        for (vs, suf), rn in ref.items():
+            m = load(r + suf, ds).merge(load(rn, ds), on="case", suffixes=("", "_r"))
+            k = summarize((m.dsc - m.dsc_r).to_numpy(), 0.03, 0.05)
+            rows.append({"model": r, "boxes": "as given" if suf == "" else "20% looser", "vs": vs,
+                         "DSC": m.dsc.mean(), "ref DSC": m.dsc_r.mean(), "NSD": m.nsd.mean(), "ref NSD": m.nsd_r.mean(),
+                         "wins/losses": f"{k['wins']}/{k['losses']}", "mean gain": k["mean_diff"],
+                         "sign p": k["sign_p_one_sided"], "Wilcoxon p": k["wilcoxon_p"]})
+    df = pd.DataFrame(rows)
+    df["Wilcoxon p (Holm)"] = float("nan")
+    for _, g in df.groupby(["boxes", "vs"]):
+        df.loc[g.index, "Wilcoxon p (Holm)"] = holm(g["Wilcoxon p"].values)
+    df = df.sort_values(["boxes", "vs", "DSC"], ascending=[False, False, False]).round(4).reset_index(drop=True)   # as given first, Z first
+    if out_name:
+        try:
+            df.to_csv(f"{REPO_D}/experiments/{ds}/{out_name}", index=False)
+            print("Saved", f"{REPO_D}/experiments/{ds}/{out_name}")
+        except OSError as e:
+            print("Could not write the table to Drive (Drive dropped?):", e)
     display(df)
     return df

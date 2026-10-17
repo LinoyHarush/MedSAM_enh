@@ -257,7 +257,25 @@ All training runs use the rewritten `train_one_gpu_multibox.py`: one sample per 
 | 8 | E2 final test + Wilcoxon, boxes as given (main) and 20% looser (robustness), every model | The reported result; uses the test set once | Always, last on our data |
 | 9 | E3 AlphaDent | External validity | If time allows |
 
-**Split between us (2026-10-17):** steps 2–9 are divided between Shelly and Linoy, with all Colab cells, in `Shelly_Training.md` (R2, R6, seeds 1 and 2 of the chosen methods, E2; the larger share) and `Linoy_Training.md` (R3, R1, R7 if R6 > R3, E3). Colab helpers (train, score, save, compare, board) live in `MedSAM/colab_runs.py`. Results are shared through `board()`, which rebuilds the table from the per-run folders on Drive; `runs_summary.csv` on Drive is no longer updated; `board()` saves the shared table as `experiments/dental_caries_val42/board.csv`.
+**Split between us (2026-10-17):** steps 2–9 are divided between Shelly and Linoy, with all Colab cells, in `Shelly_Training.md` and `Linoy_Training.md` (round 1: Shelly R2, R6; Linoy R3, R1, R7. Round 2: see the agreed plan below). Colab helpers (train, score, save, compare, board) live in `MedSAM/colab_runs.py`. Results are shared through `board()`, which rebuilds the table from the per-run folders on Drive; `runs_summary.csv` on Drive is no longer updated; `board()` saves the shared table as `experiments/dental_caries_val42/board.csv`.
+
+**Seed-0 results (2026-10-17, validation, 42 photos).**
+
+| Run | DSC | NSD | DSC 20% looser | vs Z (wins/losses, mean, sign p) | Best epoch (per-lesion val Dice) | Stopped after | s / epoch |
+|---|---|---|---|---|---|---|---|
+| R1 full fine-tuning | **0.862** | 0.932 | 0.831 | 28/14, +0.042, p 0.022, **passes** | 1 (0.797) | 5 epochs | ~275 |
+| R7 LoRA encoder only | 0.859 | 0.928 | **0.842** | 26/16, +0.040, p 0.082 | 17 (0.786) | **20 (hit the cap, still improving)** | ~197 |
+| R6 LoRA encoder + decoder | 0.853 | 0.926 | 0.828 | 23/19, +0.033, p 0.32 | 2 (0.788) | 8 | ~160 |
+| R2 frozen encoders | 0.846 | 0.927 | 0.798 | 25/17, +0.026, p 0.14 | 1 (0.767) | 6 | ~90 |
+| R3 LoRA decoder | 0.824 | 0.909 | 0.794 | 17/25, +0.004, p 0.92 | 2 (0.748) | 8 | ~105 |
+| Z (no training) | 0.820 | 0.889 | 0.728 | – | – | – | – |
+
+- Adapting the image encoder (R1, R6) helps most; decoder-only LoRA (R3) adds nothing over Z. Gaps among R1 / R6 / R2 (≤ 0.016) are below the ~0.03 noise level, so seeds decide.
+- With 20% looser boxes every trained model gains +0.07 to +0.10 over Z: training with the 0–20% box jitter made the models more robust to imprecise boxes (to be confirmed on test in E2).
+- Training curves: R1 and R2 (millions of trainable weights) overfit after epoch 1: training loss keeps falling while validation loss rises. The LoRA runs (R3, R6) don't overfit: validation loss is still flat or falling when early stopping ends them, so they may be slightly under-trained (R3's epoch-7 Dice equals its best but missed the 0.001 threshold). The learning rate never changed in any run: the inherited scheduler (patience 5, factor 0.9) never acts before early stopping. Kept as is so all runs share one protocol; reported as a limitation. Validation Dice swings by 0.01–0.03 between epochs, the same size as the gaps between runs.
+- **R7 (added after it finished):** encoder adapters alone (59 K weights, 0.6% of R1) match full fine-tuning (0.859 vs 0.862) and give the best score with looser boxes (0.842). Decoder adapters alone (R3) add nothing. So the gain comes from adapting the image features. R7 never early-stopped: it hit the 20-epoch cap with validation loss still falling, so it is under-trained under the shared protocol (limitation). R6 vs R7 (0.853 vs 0.859) is within noise; R6 stopped after 8 epochs on a noisy plateau.
+- **Plan agreed 2026-10-17 (round 2, fixed before any test results were seen):** seeds 1 and 2 for **R1 and R7** (Shelly seed 1, Linoy seed 2). If R7_s1 and R7_s2 both hit the 20-epoch cap, the best R7 seed by validation DSC continues from its best checkpoint for up to 20 more epochs, once, as a new run `R7_s<k>_ext` (Shelly). The five seed-0 models are scored on test now; every round-2 run is scored on test afterwards, whatever it shows; no choice uses test numbers. Cells and safety rules: `Shelly_Training.md`, `Linoy_Training.md`; `colab_runs.py` refuses to overwrite any existing run name on Drive.
+- **Decision 1 (proposed, before R7; superseded by the agreed plan above):** seeds 1 and 2 for R1, R6 and R2 (the same 0.03 rule applied to all four runs, since R1 came out best); R3 dropped (0.038 behind R1, no better than Z). Six runs, about 2–2.5 h of GPU time in total.
 
 Skipped under a tight schedule: the learning-rate and rank sweeps (R4, R5, R8) and the training-on-whole-photos ablation (R9). E1 was moved into this list (step 0b) on 2026-10-15.
 
