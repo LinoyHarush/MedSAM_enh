@@ -9,7 +9,7 @@ Seed 0 is done for R1, R2, R3, R6 and R7 (validation DSC 0.862 / 0.846 / 0.824 /
 ## The plan from here (fixed before anyone looks at test results)
 
 1. **Seeds 1 and 2 for R7 and R1.** Shelly trains seed 1 of each, Linoy seed 2 of each.
-2. **R7 extension** (Shelly), only if R7_s1 and R7_s2 both train all 20 epochs without early stopping.
+2. **R7 extension** (Shelly), only if R7_s1 and R7_s2 are both cut off by the 20-epoch cap while still improving (not merely ending at epoch 19 through early stopping).
 3. **Test set:** Shelly scores everything on test; no choice from here on uses test numbers.
 
 | Order | Linoy (this file) | Shelly (`Shelly_Training.md`) |
@@ -101,7 +101,7 @@ Expect `train npz: 414 (expect 414) | val npz: 42 (expect 42)`.
 | `cr.board()` | the shared results table from Drive, also saved as `board.csv` |
 | `cr.sync(src, dst)` | `rsync` that reconnects Drive and retries if the mount drops |
 | `cr.guard(name)` | stops with an error if anything named `name` already exists on Drive. `train`, `extend` and `save` call it for you |
-| `cr.capped(run)` | `True` if the run trained to its epoch cap without early stopping (read from its log on Drive) |
+| `cr.capped(run)` | `True` if the cap cut the run off while it was still improving (early stopping had patience left); `False` if early stopping ended it; `None` if the run isn't on Drive yet |
 | `cr.extend(run)` | continues `run` from its best checkpoint for up to 20 more epochs as a **new** run `<run>_ext`; the original is only read |
 | `cr.copy_test_data(runs)` / `cr.test_table(runs)` | for the test set: copy the test photos and checkpoints; the comparison table vs Z and B0 |
 

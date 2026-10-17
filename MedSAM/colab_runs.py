@@ -255,13 +255,29 @@ def final_table(final, ds=TEST):
     return df
 
 
-def capped(run):
-    """True if <run> trained up to its epoch cap without early stopping (read from its log on Drive)."""
-    log = pd.read_csv(f"{RUNS_D}/{run}/log.csv")
-    cap = 20 if FLAGS[run.split("_")[0]].startswith("--use_lora") else (15 if "freeze" in FLAGS[run.split("_")[0]] else 10)
-    best = int(log.val_dice.idxmax())
-    print(f"{run}: {len(log)} epochs (cap {cap}), best val Dice {log.val_dice.max():.4f} at epoch {int(log.epoch[best])}")
-    return len(log) >= cap
+def capped(run, min_delta=1e-3):
+    """True if <run> was cut off by the epoch cap while still improving: it reached the cap AND early stopping still
+    had patience left (replays the trainer's rule: a gain counts only if val Dice > best + min_delta).
+    False if early stopping ended it (even at the last epoch). None if the run isn't on Drive yet."""
+    p = f"{RUNS_D}/{run}/log.csv"
+    if not os.path.exists(p):
+        print(f"{run}: not on Drive yet (no {p}); wait until it has been saved")
+        return None
+    log = pd.read_csv(p)
+    flags = FLAGS[run.split("_")[0]]
+    cap, patience = (20, 5) if flags.startswith("--use_lora") else ((15, 4) if "freeze" in flags else (10, 3))
+    best, best_ep, no_improve = -1.0, -1, 0
+    for ep, d in zip(log.epoch, log.val_dice):
+        if d > best + min_delta:
+            best, best_ep, no_improve = d, int(ep), 0
+        else:
+            no_improve += 1
+    cut = len(log) >= cap and no_improve < patience
+    why = ("cut off by the cap while still improving" if cut else
+           "early stopping ended it" if no_improve >= patience else "stopped before the cap")
+    print(f"{run}: {len(log)} epochs (cap {cap}, patience {patience}), best val Dice {best:.4f} at epoch {best_ep}, "
+          f"{no_improve} epochs without gain at the end -> {why}")
+    return cut
 
 
 def extend(run, extra=20):

@@ -9,7 +9,7 @@ Seed 0 is done for R1, R2, R3, R6 and R7 (validation DSC 0.862 / 0.846 / 0.824 /
 ## The plan from here (fixed before anyone looks at test results)
 
 1. **Seeds 1 and 2 for R7 and R1.** Shelly trains seed 1 of each, Linoy seed 2 of each.
-2. **R7 extension, only if R7 caps out on both new seeds,** i.e. R7_s1 and R7_s2 both train all 20 epochs without early stopping, like R7_s0 did. Then the best of R7_s0 / s1 / s2 by validation DSC (boxes as given, from the board) continues from its best checkpoint for up to 20 more epochs, once, as a new run `R7_s<k>_ext`. Shelly runs it. If only one of the two caps out, send Claude the board and decide together.
+2. **R7 extension, only if R7 caps out on both new seeds,** i.e. R7_s1 and R7_s2 are both cut off by the 20-epoch cap while still improving, like R7_s0 (best epoch 17, early stopping still had patience left). A run that reaches epoch 19 because early stopping ends it right there does *not* count. Then the best of R7_s0 / s1 / s2 by validation DSC (boxes as given, from the board) continues from its best checkpoint for up to 20 more epochs, once, as a new run `R7_s<k>_ext`. Shelly runs it. If only one of the two caps out, send Claude the board and decide together.
 3. **Test set:** the five seed-0 models are scored now (Step A). Every run of this round is scored on test too, whatever it shows (Step E). No choice from here on uses test numbers.
 
 | Order | Shelly (this file) | Linoy (`Linoy_Training.md`) |
@@ -101,7 +101,7 @@ Expect `train npz: 414 (expect 414) | val npz: 42 (expect 42)`.
 | `cr.board()` | the shared results table from Drive, also saved as `board.csv` |
 | `cr.sync(src, dst)` | `rsync` that reconnects Drive and retries if the mount drops |
 | `cr.guard(name)` | stops with an error if anything named `name` already exists on Drive. `train`, `extend` and `save` call it for you |
-| `cr.capped(run)` | `True` if the run trained to its epoch cap without early stopping (read from its log on Drive) |
+| `cr.capped(run)` | `True` if the cap cut the run off while it was still improving (early stopping had patience left); `False` if early stopping ended it; `None` if the run isn't on Drive yet |
 | `cr.extend(run)` | continues `run` from its best checkpoint for up to 20 more epochs as a **new** run `<run>_ext`; the original is only read |
 | `cr.copy_test_data(runs)` / `cr.test_table(runs)` | for the test set: copy the test photos and checkpoints; the comparison table vs Z and B0 |
 
@@ -211,10 +211,13 @@ Wait until Linoy's R7_s2 is on the board.
 b = cr.board()
 caps = {r: cr.capped(r) for r in ["R7_s1", "R7_s2"]}
 r7 = b[b.run.isin(["R7_s0", "R7_s1", "R7_s2"])].sort_values("DSC", ascending=False)
-print("\nCapped:", caps)
-print("Best R7 seed by validation DSC:", r7.run.iloc[0])
-print("RUN THE EXTENSION" if all(caps.values()) else
-      "Don't extend" if not any(caps.values()) else "Only one capped: send Claude the board first")
+print("\nCut off by the cap:", caps)
+if None in caps.values():
+    print("WAIT: not every R7 seed is on Drive yet")
+else:
+    print("Best R7 seed by validation DSC:", r7.run.iloc[0])
+    print("RUN THE EXTENSION" if all(caps.values()) else
+          "Don't extend" if not any(caps.values()) else "Only one was cut off: send Claude the board first")
 ```
 
 **3b · The extension** (only if 3a says RUN THE EXTENSION; up to ~70 min)
