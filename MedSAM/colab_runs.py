@@ -103,6 +103,15 @@ def copy_test_data(final_runs):
     print("B0 on test already scored (og_ckpt):", os.path.exists(f"{LOCAL_EXP}/{TEST}/og_ckpt/metrics_per_case.csv"))
 
 
+def device():
+    """cuda if this runtime has a GPU (and a CUDA build of torch), else cpu. Inference works on either."""
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
 def infer_ckpt(run):
     return f"/content/runs/{run}_infer.pth"
 
@@ -129,6 +138,8 @@ def train(method, seed):
     """Train one run on the runtime's disk and export its inference checkpoint. Epochs/patience/lr: trainer defaults.
     Refuses to start if a run with this name already exists on Drive."""
     run = f"{method}_s{seed}"
+    if device() != "cuda":
+        raise RuntimeError("No GPU on this runtime: switch to a T4 GPU runtime (Runtime -> Change runtime type) for training")
     guard(run)
     if os.path.exists(f"/content/runs/{run}"):
         raise RuntimeError(f"/content/runs/{run} already exists on this runtime; restart the runtime or pick another seed")
@@ -145,11 +156,14 @@ def score(name, inf, ds=VAL, zoom_above=2000, variants=("given", "p20")):
     """Zoom inference, then eval_run, with the boxes as given (<name>) and/or 20% looser (<name>_p20, seed 0 as in E1)."""
     T = f"/content/work/data/{ds}/MedSAM_test/RGB_Teeth"
     n_imgs = len([f for f in os.listdir(f"{T}/imgs") if f.endswith(".npz")])
+    dev = device()
+    if dev == "cpu":
+        print("No GPU on this runtime: inference runs on the CPU (a few minutes per 63 photos, same results).")
     for v in variants:
         n = name if v == "given" else f"{name}_p20"
         extra = "" if v == "given" else "-box_perturb 0.2 -perturb_seed 0"
         sh(f'cd {CODE} && python infer_zoom.py -i "{T}/imgs" -o "{T}/segs_{n}" -lite_medsam_checkpoint_path {inf} '
-           f"-zoom_above {zoom_above} -device cuda {extra}")
+           f"-zoom_above {zoom_above} -device {dev} {extra}")
         segs_dir = f"{T}/segs_{n}"   # also holds infer_zoom's zoom_boxes.csv and efficiency.csv: count predictions only
         n_segs = len([f for f in os.listdir(segs_dir) if f.endswith(".npz")]) if os.path.isdir(segs_dir) else 0
         if n_segs != n_imgs:   # eval_run would otherwise fall back to the old whole-photo inference
@@ -255,6 +269,8 @@ def extend(run, extra=20):
     <run>_ext. The original run's folders are only read, never written."""
     import torch
     new = f"{run}_ext"
+    if device() != "cuda":
+        raise RuntimeError("No GPU on this runtime: switch to a T4 GPU runtime for training")
     guard(new)
     method, seed = run.split("_")[0], int(run.split("_s")[1])
     sync(f"{RUNS_D}/{run}/", f"/content/runs/{new}/")      # Drive -> runtime copy; the Drive original is untouched
