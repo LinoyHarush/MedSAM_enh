@@ -245,8 +245,8 @@ All training runs use the rewritten `train_one_gpu_multibox.py`: one sample per 
 
 | # | Run | Why at this point | Gate |
 |---|---|---|---|
-| 0 | Z on validation (inference only) | The reference all runs are compared with | – |
-| 0b | **E1 box robustness** on validation (inference only): B0 and Z with boxes loosened by 10% and 20% per side (`infer_zoom.py -box_perturb`, seed 0) | Can change two training settings before any GPU time is spent: whether to train on crops, and how much box jitter to train with (added 2026-10-15) | Rules below |
+| 0 | ✅ Z on validation (inference only), done 2026-10-17: DSC 0.820 / NSD 0.889 | The reference all runs are compared with | – |
+| 0b | ✅ **Done 2026-10-17 (keep crops; train with `-bbox_shift_frac 0.2`).** **E1 box robustness** on validation (inference only): B0 and Z with boxes loosened by 10% and 20% per side (`infer_zoom.py -box_perturb`, seed 0) | Can change two training settings before any GPU time is spent: whether to train on crops, and how much box jitter to train with (added 2026-10-15) | Rules below |
 | 1 | Trial: 2 epochs, 20 photos, frozen encoders | Catches bugs in minutes; measures seconds per epoch for planning | All checks in the brief pass |
 | 2 | R2 seed 0 | Best earlier setup; first answer to "does training add anything on top of zoom?" | – |
 | 3 | R3 seed 0 | The project's parameter-efficient method | – |
@@ -254,15 +254,43 @@ All training runs use the rewritten `train_one_gpu_multibox.py`: one sample per 
 | 5 | Seeds 1 and 2 for the best of R2 / R3 / R6, and for any run within ~0.03 of it | A result worth reporting needs 3 seeds | After 2–4 are scored |
 | 6 | R1 seed 0 | Upper bound / overfitting check; slowest and most likely to overfit | If time allows |
 | 7 | R7 seed 0 | Only if R6 beats R3: shows the gain comes from the encoder | If R6 > R3 |
-| 8 | E2 final test + Wilcoxon | The reported result; uses the test set once | Always, last on our data |
+| 8 | E2 final test + Wilcoxon, boxes as given (main) and 20% looser (robustness), every model | The reported result; uses the test set once | Always, last on our data |
 | 9 | E3 AlphaDent | External validity | If time allows |
 
 Skipped under a tight schedule: the learning-rate and rank sweeps (R4, R5, R8) and the training-on-whole-photos ablation (R9). E1 was moved into this list (step 0b) on 2026-10-15.
 
 **E1 decision rules (fixed 2026-10-15, before running).** B0 under loosened boxes is run through `infer_zoom.py -zoom_above 100000` (whole photo, identical to B0), so both methods see exactly the same boxes.
 - **Keep training on crops** if, on the 18 large validation photos, Z still beats B0 with boxes loosened by 20%: one-sided sign test p ≤ 0.05 and mean DSC gain ≥ +0.03 (the rule of section 9). Otherwise stop and rethink the crop rule before any training.
-- **Raise box jitter in training** (`-bbox_shift`, e.g. from 5 to 15 px) if either method loses more than 0.05 mean DSC (all 42 photos) going from the given boxes to 20% looser boxes.
+- **Raise box jitter in training** (`-bbox_shift`, e.g. from 5 to 15 px; implemented as `-bbox_shift_frac`, see Decision below) if either method loses more than 0.05 mean DSC (all 42 photos) going from the given boxes to 20% looser boxes.
 - 10% is reported for the shape of the curve; the decisions use 20%.
+
+**Results (2026-10-17).** Step 0 (Z) and step 0b (E1) done, validation, 42 photos.
+
+| Run | Boxes | Mean DSC |
+|---|---|---|
+| B0 | as given | 0.708 |
+| **Z (official reference)** | as given | **0.820** (NSD 0.889) |
+| B0 | 10% looser | 0.694 |
+| Z | 10% looser | 0.793 |
+| B0 | 20% looser | 0.645 |
+| Z | 20% looser | 0.728 |
+
+- Z self-check: all 24 small photos identical to B0 (OK).
+- **Rule 1: KEEP training on crops.** With 20% looser boxes, Z still beats B0 on 15 of 18 large photos, mean +0.192 DSC, sign test p = 0.004.
+- **Rule 2: RAISE box jitter.** Going to 20% looser boxes costs B0 −0.063 and Z −0.092 mean DSC, both beyond −0.05. Zoom is the more sensitive one, because its crop size follows the box size.
+- **Decision:** the trainer gets a proportional box loosening, `-bbox_shift_frac 0.2` (each side moved out by a random 0–20% of the box size), **instead of** the old 0–5 px jitter (changed 2026-10-17 at Shelly's request; the 0–5 px mode is used only with `-bbox_shift_frac 0`). It is the trainer's default from now on, so every run in list B uses it. Proportional rather than a fixed pixel count, because E1's looser boxes are proportional and a fixed 15 px would mean very different looseness for small and large lesions.
+- **Jitter is training-only, on purpose.** Validation inside the trainer uses the boxes as given, because that is exactly what inference gets: `infer_zoom.py` receives the given boxes for every model (B0, Z, every trained run, the final test). Validation is what picks each run's best epoch, so it must measure the same task the test scores; random jitter there would also make validation Dice change from epoch to epoch for reasons unrelated to the model. Robustness to loose boxes is measured separately and identically for all models, with E1's fixed, seeded 10%/20% loosening.
+- Later, re-running E1 on the trained models shows whether this made them more robust than Z.
+
+**Scoring rule for list B and E2 (agreed 2026-10-17).** Every model is scored on identical inputs; the boxes as given decide, the looser boxes are always reported but never used to choose.
+
+| Stage | Boxes as given | 20% looser (`-box_perturb 0.2 -perturb_seed 0`) | Why |
+|---|---|---|---|
+| Inside the trainer (best epoch, early stopping, learning rate) | ✅ only | ❌ | A run needs one criterion, and it should be the main task. |
+| Scoring a finished run on validation (choosing between runs, e.g. R6 vs R3) | ✅ decides | ✅ reported, does not decide | Decisions on the main task; the loose-box score shows early whether training jitter helps. |
+| Final test E2 (63 photos), every model incl. B0 and Z | ✅ main result | ✅ robustness result | Same seeded boxes for all models, so both comparisons are fair. Nothing is tuned on the loose-box score. |
+
+Training jitter is part of each method, like the flips; it is never mirrored on the test boxes for one model only. If R2 falls clearly below Z on the boxes as given, compare it with the same run at `-bbox_shift_frac 0` to see whether the jitter cost something.
 
 
 ## 11. Why zoom helps some photos and not others (validation, zoom on every photo, 2026-10-15)

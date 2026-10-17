@@ -74,7 +74,12 @@ def parse_args():
     p.add_argument("-batch_size", type=int, default=4)
     p.add_argument("-num_workers", type=int, default=2)
     p.add_argument("-device", default="cuda:0")
-    p.add_argument("-bbox_shift", type=int, default=5, help="Random box enlargement during training, in px at 256.")
+    p.add_argument("-bbox_shift_frac", type=float, default=0.2,
+                   help="Random box loosening during training, as a fraction of the box size per side (0..frac). "
+                        "Default 0.2, decided by robustness test E1 on 2026-10-17 (review file, section 10). "
+                        "Replaces the old fixed-pixel jitter; 0 = use -bbox_shift instead.")
+    p.add_argument("-bbox_shift", type=int, default=5,
+                   help="Old fixed-pixel jitter (px at 256, per side, 0..N). Used ONLY when -bbox_shift_frac is 0.")
     p.add_argument("-lr", type=float, default=None, help="Default by run type: 5e-5 (full model, decoder), 1e-4 (LoRA).")
     p.add_argument("-weight_decay", type=float, default=1e-2)
     p.add_argument("-iou_loss_weight", type=float, default=1.0)
@@ -200,9 +205,9 @@ def build_samples(npz_dir, args, desc):
 
 
 class LesionDataset(Dataset):
-    def __init__(self, images, samples, bbox_shift, data_aug):
+    def __init__(self, images, samples, bbox_shift, data_aug, bbox_shift_frac=0.0):
         self.images, self.samples = images, samples
-        self.bbox_shift, self.data_aug = bbox_shift, data_aug
+        self.bbox_shift, self.data_aug, self.bbox_shift_frac = bbox_shift, data_aug, bbox_shift_frac
 
     def __len__(self):
         return len(self.samples)
@@ -222,7 +227,13 @@ class LesionDataset(Dataset):
             if random.random() > 0.5:
                 img, mask = img[::-1], mask[::-1]
                 y1, y2 = S - 1 - y2, S - 1 - y1
-        if self.bbox_shift > 0:
+        if self.bbox_shift_frac > 0:      # proportional loosening, each side independently (like E1's looser boxes)
+            bw, bh = max(x2 - x1, 1), max(y2 - y1, 1)
+            x1 = max(0, int(round(x1 - random.uniform(0, self.bbox_shift_frac) * bw)))
+            x2 = min(S - 1, int(round(x2 + random.uniform(0, self.bbox_shift_frac) * bw)))
+            y1 = max(0, int(round(y1 - random.uniform(0, self.bbox_shift_frac) * bh)))
+            y2 = min(S - 1, int(round(y2 + random.uniform(0, self.bbox_shift_frac) * bh)))
+        elif self.bbox_shift > 0:         # old fixed-pixel jitter, only when proportional loosening is off
             x1 = max(0, x1 - random.randint(0, self.bbox_shift))
             y1 = max(0, y1 - random.randint(0, self.bbox_shift))
             x2 = min(S - 1, x2 + random.randint(0, self.bbox_shift))
@@ -385,7 +396,10 @@ def main():
 
     # ---- data
     tr_images, tr_samples, _ = build_samples(args.train_npz_dir, args, "train")
-    train_ds = LesionDataset(tr_images, tr_samples, args.bbox_shift, data_aug=True)
+    train_ds = LesionDataset(tr_images, tr_samples, args.bbox_shift, data_aug=True, bbox_shift_frac=args.bbox_shift_frac)
+    print(f"Training box jitter: each side loosened by 0-{args.bbox_shift_frac:.0%} of the box size" if args.bbox_shift_frac > 0
+          else f"Training box jitter: 0-{args.bbox_shift} px per side (old fixed-pixel mode)")
+    print("Validation boxes: as given, no jitter (same boxes infer_zoom.py receives at test time)")
     g = torch.Generator()
     g.manual_seed(args.seed)
     if args.use_weighted_sampler:
