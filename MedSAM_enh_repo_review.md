@@ -375,3 +375,38 @@ Per-photo DSC of B0 and of zoom on every photo (`zoom_z1`), from `paired_dsc.csv
 - **Several lesions score lower than one lesion once zoom is used** (0.817 vs 0.846 overall; 0.848 vs 0.895 in large photos). With B0 it looked the other way round (0.734 vs 0.656) only because two of B0's three complete misses (DSC 0) were one-lesion photos; without those three photos B0 scores the same for both (0.762 vs 0.765). Multi-lesion photos remain the harder case and are worth a per-lesion look later (smaller lesions, neighbours inside each other's crops, lower model confidence).
 - **Small photos are not limited by resolution, so zoom only perturbs them.** Their gain does not depend on how much they were zoomed (correlation 0.05) or on their number of lesions (0.06), but strongly on how good B0 already was (−0.86): where B0 was good, the re-cropped input (less context, different contrast normalisation) moves the score down; where B0 was poor, it moves it up. Median zoom for small photos that lost was only 1.5×. This supports the decision to zoom only photos above 2,000 px.
 - The analysis explains the decision of section 9; it was not used to change it.
+
+
+## 12. Extra analyses after the main result (plan fixed 2026-10-20, before any of them was run)
+
+Cells: `Shelly_Training.md` (Steps G and K), `Linoy_Training.md` (Step R4) and `AlphaDent_Plan.md` (E3); code: `MedSAM/colab_extras.py`, `MedSAM/prepare_alphadent.py`, run types `R4d` / `R4e` in `MedSAM/colab_runs.py`. (`MedSAM/prepare_kvasir.py` is not needed: the Kvasir sets were already prepared.) Each analysis writes new names only; nothing already on Drive is touched.
+
+| ID | Question | What is run | Main comparison (fixed now) | Cost |
+|---|---|---|---|---|
+| G1 | Is zoom still needed after training? | R1 and R7 (3 seeds each) on test **without** zoom (`<run>_nozoom`) | R7 (mean of 3 seeds), 27 large test photos: with vs without zoom, two-sided Wilcoxon. Small photos must come out identical (zoom never acts there): a built-in check | Inference only, ~10 min on GPU |
+| G2 | What does zoom cost at inference? | B0, Z, R7 (median seed), R1_s0 timed in one session on one device | Seconds per photo, large vs small photos. LoRA adds nothing at inference (merged weights) | ~5 min |
+| G3 | Where does R7 still fail? | Per-photo R7 DSC (mean of 3 seeds) vs photo size, number of boxes, lesion size | Spearman correlations; the 10 worst photos; DSC vs lesion size plot | Seconds |
+| K | Does dental training hurt LiteMedSAM elsewhere (forgetting)? | The Kvasir test sets already prepared in `LiteMedSAM_Baseline_production.ipynb` (official splits, the datasets' own boxes): Kvasir-SEG (120 polyp images) and Kvasir-Instrument (118 instrument images). B0, R2, R3, R6 (seed 0), R1 and R7 (3 seeds) | Every model vs B0, per image, two-sided Wilcoxon, Holm-corrected, per dataset. Images are < 2,000 px, so zoom never acts (Z = B0) | ~30–60 min CPU or ~10 min GPU |
+| R4 | Was R3 only slow to learn? Does R7 gain from a higher learning rate? | `R4d` = R3 at lr 5e-4, `R4e` = R7 at lr 5e-4, seed 0 each, validation | R4d vs R3_s0 (0.824): a gain ≥ 0.03 means R3's decoder adapters were held back by the learning rate. R4e vs R7's seed range (0.859–0.864). Single seed each: a sensitivity check, not a new final method | ~15 + ~55 min GPU |
+
+**G1 caveat.** The trained models saw large photos only as crops during training, so running them without zoom also shows them large photos in a form they never trained on. G1 therefore answers "does our pipeline still need zoom at inference?", not "could training alone replace zoom?". The clean answer to the second question would be R9 from run list A (train on whole photos, score without zoom), which we skipped.
+
+**How to report them.** G1–G3 and K are analyses of the final models, decided before running, so their test/Kvasir numbers can be reported as they come. R4 runs after the test set was seen, so it is reported as a sensitivity check only; its test numbers, if computed, are labelled post hoc and never replace R7 as the method we report.
+
+**Kvasir caveat.** Kvasir-SEG may have been part of the large public collection LiteMedSAM was trained on (not verified). B0 is then on familiar data, which makes this a fair test of *forgetting*, not of generalisation. A drop for R1/R2 and none for R3/R6/R7 would show a practical advantage of LoRA: its adapters can be switched off for non-dental images, which restores B0 exactly.
+
+**AlphaDent (E3)**: the full plan, with cells, checks and time per step, is in `AlphaDent_Plan.md` (repo root). Inference only; estimated effort about half a day to a day.
+
+
+## 13. Limitations
+
+1. **Small evaluation sets.** 42 validation and 63 test photos. A single run's difference below about 0.03 DSC is within noise; that is why decisions use seeds and paired per-photo tests.
+2. **One dental dataset.** Roboflow "Dental Caries Segmentation" (CC BY 4.0, no published description of acquisition or labelling). Generalisation to other clinics, cameras and labelling styles is untested until AlphaDent (E3).
+3. **Boxes are given.** Ground-truth lesion boxes are the prompts, so the results measure how well a lesion is outlined once its location is known, not detection. Results are not directly comparable with fully automatic methods (related work). Robustness to imprecise boxes is tested only with synthetic loosening (20%, seeded), not with boxes drawn by people or a detector.
+4. **Merged and noisy labels.** Caries, cavity and crack are merged into one class; tooth is background. Caries boundaries are gradual, which limits the achievable Dice. 3 of 1,611 lesions have no box and are not evaluated.
+5. **Training protocol not tuned per method.** One learning rate per run type, constant in practice (the inherited scheduler never acts before early stopping), fixed epoch caps, LoRA rank 8, box jitter 0–20%, zoom threshold 2,000 px and margin 0.5, each chosen once. R7_s0 reached its 20-epoch cap while still improving. R2, R3 and R6 have one seed only.
+6. **Epoch selection uses a stand-in metric.** The best epoch is chosen by per-lesion Dice at 256 px, not by the reported per-photo DSC at full resolution; two checkpoints equal on the first can differ by about 0.02 on the second (seen with R1).
+7. **Test set used in two rounds.** Seed-0 models were scored on test before the round-2 runs; the round-2 plan (seeds, the R7 extension rule, and the R7 vs R1 test) was fixed before those results were seen, and every round-2 run is scored on test regardless of outcome. R4 is post hoc (section 12).
+8. **Multiple comparisons.** Holm correction is applied within each table of model-vs-reference tests, not across all tables in the project.
+9. **Timing.** Training and inference times come from free-tier Colab T4 sessions and vary by about ±20% between sessions and accounts (e.g. R7: 158–196 s per epoch); inference times are only compared within one session (G2).
+10. **The 256-px input of LiteMedSAM** is a fixed model constraint; zoom works around it for large photos, but small photos are still downscaled, and lesions that occupy a few pixels at 256 px remain hard (G3).

@@ -34,6 +34,13 @@ OG = "/content/lite_medsam.pth"
 LOCAL_EXP = "/content/work/experiments"
 VAL = "dental_caries_val42"
 TEST = "dental_caries_test63"
+# Folder under <data>/<dataset>/MedSAM_test/ that holds imgs/ and gts/ (our dental sets use RGB_Teeth)
+SUBSET = {"kvasir_seg": "RGB_KvasirSeg", "kvasir_instruments": "RGB_KvasirInstruments",
+          "alphadent_valid": "RGB_AlphaDent", "alphadent_train": "RGB_AlphaDent"}
+
+
+def sub(ds):
+    return SUBSET.get(ds, "RGB_Teeth")
 
 FLAGS = {                                                   # the runs of list B
     "R1": "",                                               # full fine-tuning
@@ -41,6 +48,9 @@ FLAGS = {                                                   # the runs of list B
     "R3": "--use_lora --lora_scope mask_decoder",           # LoRA decoder q,v, r=8
     "R6": "--use_lora --lora_scope both",                   # LoRA encoder qkv + decoder q,v, r=8
     "R7": "--use_lora --lora_scope image_encoder",          # LoRA encoder qkv only, r=8
+    # R4 learning-rate check (added 2026-10-20): the two LoRA scopes at 5x the default LoRA lr (1e-4 -> 5e-4)
+    "R4d": "--use_lora --lora_scope mask_decoder -lr 5e-4",  # = R3 at lr 5e-4: was R3 only slow to learn?
+    "R4e": "--use_lora --lora_scope image_encoder -lr 5e-4", # = R7 at lr 5e-4: does R7 converge sooner / higher?
 }
 
 REPO_D = RUNS_D = None
@@ -112,13 +122,28 @@ def device():
         return "cpu"
 
 
+def copy_eval_data(ds, runs=()):
+    """Any evaluation set already prepared on Drive (e.g. kvasir_seg, alphadent_valid): photos and masks to the
+    runtime's disk (old predictions and metrics excluded), its experiments folder, and the given runs' checkpoints."""
+    sync(f"{REPO_D}/data/{ds}/MedSAM_test/{sub(ds)}", f"/content/work/data/{ds}/MedSAM_test/",
+         extra=["--exclude=segs_*", "--exclude=metrics*"])
+    if os.path.isdir(f"{REPO_D}/experiments/{ds}"):
+        sync(f"{REPO_D}/experiments/{ds}", f"{LOCAL_EXP}/")
+    for r in runs:
+        if not os.path.exists(infer_ckpt(r)):
+            sync(f"{RUNS_D}/{r}_infer.pth", "/content/runs/")
+    T = f"/content/work/data/{ds}/MedSAM_test/{sub(ds)}"
+    print(f"{ds}: {len([f for f in os.listdir(T + '/imgs') if f.endswith('.npz')])} images, "
+          f"{len([f for f in os.listdir(T + '/gts') if f.endswith('.npz')])} masks on the runtime's disk")
+
+
 def infer_ckpt(run):
     return f"/content/runs/{run}_infer.pth"
 
 
 def on_drive(name, ds=VAL):
     """Drive paths that already hold results named <name> (checkpoints, scores, predictions)."""
-    T = f"{REPO_D}/data/{ds}/MedSAM_test/RGB_Teeth"
+    T = f"{REPO_D}/data/{ds}/MedSAM_test/{sub(ds)}"
     paths = [f"{RUNS_D}/{name}", f"{RUNS_D}/{name}_infer.pth"]
     for n in (name, f"{name}_p20"):
         paths += [f"{REPO_D}/experiments/{ds}/{n}", f"{T}/segs_{n}"]
@@ -154,7 +179,7 @@ def train(method, seed):
 
 def score(name, inf, ds=VAL, zoom_above=2000, variants=("given", "p20")):
     """Zoom inference, then eval_run, with the boxes as given (<name>) and/or 20% looser (<name>_p20, seed 0 as in E1)."""
-    T = f"/content/work/data/{ds}/MedSAM_test/RGB_Teeth"
+    T = f"/content/work/data/{ds}/MedSAM_test/{sub(ds)}"
     n_imgs = len([f for f in os.listdir(f"{T}/imgs") if f.endswith(".npz")])
     dev = device()
     if dev == "cpu":
@@ -168,19 +193,19 @@ def score(name, inf, ds=VAL, zoom_above=2000, variants=("given", "p20")):
         n_segs = len([f for f in os.listdir(segs_dir) if f.endswith(".npz")]) if os.path.isdir(segs_dir) else 0
         if n_segs != n_imgs:   # eval_run would otherwise fall back to the old whole-photo inference
             raise RuntimeError(f"infer_zoom wrote {n_segs}/{n_imgs} predictions for {n}; read the output above")
-        sh(f"cd {CODE} && python eval_run.py --run_name {n} --ckpt {inf} --repo /content/work --dataset {ds}")
+        sh(f"cd {CODE} && python eval_run.py --run_name {n} --ckpt {inf} --repo /content/work --dataset {ds} --subset {sub(ds)}")
 
 
 def save(name, ds=VAL, trained=True, variants=("given", "p20"), overwrite=False):
     """Copy ONE run back to Drive: checkpoints (if trained), its experiments folders, its predictions.
     Refuses if the scores of <name> on <ds> are already on Drive (pass overwrite=True only to finish an interrupted
     save of this session's run). Checkpoints of a trained run are always checked too."""
-    T = f"/content/work/data/{ds}/MedSAM_test/RGB_Teeth"
+    T = f"/content/work/data/{ds}/MedSAM_test/{sub(ds)}"
     if not overwrite:
         found = []
         for v in variants:
             n = name if v == "given" else f"{name}_p20"
-            found += [p for p in (f"{REPO_D}/experiments/{ds}/{n}", f"{REPO_D}/data/{ds}/MedSAM_test/RGB_Teeth/segs_{n}")
+            found += [p for p in (f"{REPO_D}/experiments/{ds}/{n}", f"{REPO_D}/data/{ds}/MedSAM_test/{sub(ds)}/segs_{n}")
                       if os.path.exists(p)]
         if trained:
             found += [p for p in (f"{RUNS_D}/{name}", f"{RUNS_D}/{name}_infer.pth") if os.path.exists(p)]
@@ -193,7 +218,7 @@ def save(name, ds=VAL, trained=True, variants=("given", "p20"), overwrite=False)
     for v in variants:
         n = name if v == "given" else f"{name}_p20"
         sync(f"{LOCAL_EXP}/{ds}/{n}", f"{REPO_D}/experiments/{ds}/")
-        sync(f"{T}/segs_{n}", f"{REPO_D}/data/{ds}/MedSAM_test/RGB_Teeth/")
+        sync(f"{T}/segs_{n}", f"{REPO_D}/data/{ds}/MedSAM_test/{sub(ds)}/")
 
 
 def load(name, ds=VAL, root=LOCAL_EXP):
@@ -220,7 +245,7 @@ def board(ds=VAL):
     z, zp = load("Z", ds, root), load("Z_p20", ds, root)
     rows = [{"run": "Z", "DSC": z.dsc.mean(), "NSD": z.nsd.mean(), "DSC_p20": zp.dsc.mean()}]
     for d in sorted(os.listdir(f"{root}/{ds}")):
-        if not re.fullmatch(r"R\d+_s\d+(_ext)?", d) or load(d, ds, root) is None:
+        if not re.fullmatch(r"R\d+[a-z]?_s\d+(_ext)?", d) or load(d, ds, root) is None:
             continue
         a, ap = load(d, ds, root), load(f"{d}_p20", ds, root)
         m = a.merge(z, on="case", suffixes=("", "_z"))

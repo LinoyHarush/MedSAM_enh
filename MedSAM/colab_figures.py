@@ -43,8 +43,13 @@ def _root():
     return f"{cr.REPO_D}/experiments"
 
 
-def _out(name):
-    d = f"{_root()}/{cr.TEST}/figures"
+def _label(ds):
+    ds = ds or cr.TEST
+    return {cr.TEST: "Test set (63 photos)", "alphadent_valid": "AlphaDent validation (external)"}.get(ds, ds)
+
+
+def _out(name, ds=None):
+    d = f"{_root()}/{ds or cr.TEST}/figures"
     os.makedirs(d, exist_ok=True)
     return f"{d}/{name}"
 
@@ -65,8 +70,8 @@ def _method_scores(m, suf="", ds=None):
     return pd.concat(runs, axis=1).mean(axis=1), [r.mean() for r in runs]
 
 
-def _save(fig, name):
-    p = _out(name)
+def _save(fig, name, ds=None):
+    p = _out(name, ds)
     try:
         fig.savefig(p, dpi=200, bbox_inches="tight")
         print("Saved", p)
@@ -125,13 +130,14 @@ def _bar_labels(ax, bars, vals, fmt="{:.3f}"):
                 ha="center", va="bottom", fontsize=10, color=INK)
 
 
-def fig_overview():
-    """Test DSC (boxes as given) of every method; R1 and R7 = mean of 3 seeds with the seed range."""
+def fig_overview(ds=None):
+    """DSC (boxes as given) of every method on the test set (or another scored set, e.g. alphadent_valid);
+    R1 and R7 = mean of 3 seeds with the seed range."""
     _style()
     order = ["B0", "Z", "R3", "R2", "R6", "R1", "R7"]
     means, lo, hi = [], [], []
     for m in order:
-        _, per = _method_scores(m)
+        _, per = _method_scores(m, "", ds)
         means.append(np.mean(per)); lo.append(np.mean(per) - min(per)); hi.append(max(per) - np.mean(per))
     fig, ax = plt.subplots(figsize=(10, 4.8))
     x = np.arange(len(order))
@@ -144,10 +150,11 @@ def fig_overview():
                 fontsize=10, color=INK)
     ax.set_xticks(x, [NAMES[m].replace(" ", "\n", 1) + ("\n(3 seeds)" if m in ("R1", "R7") else
                       "\n(1 seed)" if m in SEEDS else "") for m in order], fontsize=9.5)
-    ax.set_ylim(0.6, 0.9); ax.set_ylabel("Mean DSC (63 test photos)")
-    ax.set_title("Test set: zoom and training each add accuracy (boxes as given)", loc="left", fontsize=13, color=INK)
+    lo_y = max(0.0, np.floor((min(means) - 0.08) * 10) / 10)
+    ax.set_ylim(lo_y, max(0.9, max(means) + 0.05)); ax.set_ylabel("Mean DSC per photo")
+    ax.set_title(f"{_label(ds)}: every method, boxes as given", loc="left", fontsize=13, color=INK)
     ax.grid(axis="x", visible=False)
-    _save(fig, "fig1_overview.png")
+    _save(fig, "fig1_overview.png", ds)
 
 
 def fig_size_groups():
@@ -172,12 +179,12 @@ def fig_size_groups():
     _save(fig, "fig2_size_groups.png")
 
 
-def fig_robustness():
-    """Boxes as given vs 20% looser, test DSC: a slope per method, labelled at both ends."""
+def fig_robustness(ds=None):
+    """Boxes as given vs 20% looser: a slope per method, labelled at both ends."""
     _style()
     meths = ["B0", "Z", "R1", "R7"]
     fig, ax = plt.subplots(figsize=(7.5, 5))
-    ends = {m: (np.mean(_method_scores(m, "")[1]), np.mean(_method_scores(m, "_p20")[1])) for m in meths}
+    ends = {m: (np.mean(_method_scores(m, "", ds)[1]), np.mean(_method_scores(m, "_p20", ds)[1])) for m in meths}
 
     def spread(vals, gap=0.014):                           # label positions at least `gap` apart, in value order
         order = sorted(vals, key=vals.get); pos, last = {}, -1.0
@@ -191,10 +198,12 @@ def fig_robustness():
         ax.text(-0.04, left[m], f"{NAMES[m]}  {a:.3f}", ha="right", va="center", fontsize=10, color=INK)
         ax.text(1.04, right[m], f"{b:.3f}  ({b - a:+.3f})", ha="left", va="center", fontsize=10, color=INK)
     ax.set_xticks([0, 1], ["Boxes as given", "Boxes 20% looser"])
-    ax.set_xlim(-0.9, 1.45); ax.set_ylim(0.6, 0.9); ax.set_ylabel("Mean DSC (test)")
-    ax.set_title("Trained models barely notice looser boxes", loc="left", fontsize=13, color=INK)
+    allv = [v for e in ends.values() for v in e]
+    ax.set_xlim(-0.9, 1.45); ax.set_ylim(max(0.0, min(allv) - 0.05), max(0.9, max(allv) + 0.03))
+    ax.set_ylabel("Mean DSC per photo")
+    ax.set_title(f"{_label(ds)}: boxes as given vs 20% looser", loc="left", fontsize=13, color=INK)
     ax.grid(axis="x", visible=False)
-    _save(fig, "fig3_robustness.png")
+    _save(fig, "fig3_robustness.png", ds)
 
 
 def fig_training_curves():
@@ -217,21 +226,23 @@ def fig_training_curves():
     _save(fig, "fig4_training_curves.png")
 
 
-def _pred(name, case):
-    for base in (f"/content/work/data/{cr.TEST}/MedSAM_test/RGB_Teeth",
-                 f"{cr.REPO_D}/data/{cr.TEST}/MedSAM_test/RGB_Teeth"):
+def _pred(name, case, ds=None):
+    ds = ds or cr.TEST
+    for base in (f"/content/work/data/{ds}/MedSAM_test/{cr.sub(ds)}",
+                 f"{cr.REPO_D}/data/{ds}/MedSAM_test/{cr.sub(ds)}"):
         p = f"{base}/segs_{name}/{case}"
         if os.path.exists(p):
             return np.load(p)["segs"] > 0
     return None
 
 
-def _b0_preds(cases):
+def _b0_preds(cases, ds=None):
     """B0 predictions for a few photos, made on the fly (whole photo, same as B0) if not stored."""
-    missing = [c for c in cases if _pred("og_ckpt", c) is None]
-    out = {c: _pred("og_ckpt", c) for c in cases if c not in missing}
+    ds = ds or cr.TEST
+    missing = [c for c in cases if _pred("og_ckpt", c, ds) is None]
+    out = {c: _pred("og_ckpt", c, ds) for c in cases if c not in missing}
     if missing:
-        T = f"/content/work/data/{cr.TEST}/MedSAM_test/RGB_Teeth"
+        T = f"/content/work/data/{ds}/MedSAM_test/{cr.sub(ds)}"
         tmp_i, tmp_o = "/content/fig_tmp/imgs", "/content/fig_tmp/segs"
         os.makedirs(tmp_i, exist_ok=True)
         for c in missing:
@@ -243,24 +254,33 @@ def _b0_preds(cases):
     return out
 
 
-def fig_examples():
-    """Rows chosen by rule, not by eye: the 2 small photos where R7 gains most over Z, the large photo where Z gains
-    most over B0, and the photo where R7 loses most to Z. R7 = its median seed on test (no cherry-picking)."""
+def fig_examples(ds=None):
+    """Rows chosen by rule, not by eye. Dental test set: the 2 small photos where R7 gains most over Z, the large photo
+    where Z gains most over B0, and the photo where R7 loses most to Z. Other sets (e.g. AlphaDent, all photos large):
+    the same rule without the size condition. R7 = its median seed on that set (no cherry-picking)."""
     _style()
-    T = f"/content/work/data/{cr.TEST}/MedSAM_test/RGB_Teeth"
+    ds = ds or cr.TEST
+    by_size = ds == cr.TEST
+    T = f"/content/work/data/{ds}/MedSAM_test/{cr.sub(ds)}"
     if not os.path.isdir(f"{T}/imgs"):
-        raise FileNotFoundError("Test photos not on this runtime: run cr.copy_test_data([]) first")
-    seeds = sorted(SEEDS["R7"], key=lambda r: _scores(r).dsc.mean())
+        raise FileNotFoundError(f"Photos of {ds} not on this runtime: run cr.copy_eval_data('{ds}') first")
+    seeds = sorted(SEEDS["R7"], key=lambda r: _scores(r, ds).dsc.mean())
     r7 = seeds[1]
     split = cr.split.set_index("case").size_group
-    z, b0, r = _scores("Z").dsc, _scores("og_ckpt").dsc, _scores(r7).dsc
+    z, b0, r = _scores("Z", ds).dsc, _scores("og_ckpt", ds).dsc, _scores(r7, ds).dsc
     g7 = (r - z).sort_values()
-    small = [c for c in g7.index[::-1] if split.get(c) == "small"][:2]
-    large = [(z - b0)[split.reindex(z.index) == "large"].idxmax()]
-    worst = [c for c in g7.index if c not in small + large][:1]
-    rows = [(small[0], "Small photo: R7 gains most over Z"), (small[1], "Small photo: 2nd largest R7 gain"),
-            (large[0], "Large photo: zoom gains most over B0"), (worst[0], "Photo where R7 loses most to Z")]
-    b0p = _b0_preds([c for c, _ in rows])
+    if by_size:
+        top = [c for c in g7.index[::-1] if split.get(c) == "small"][:2]
+        zb = [(z - b0)[split.reindex(z.index) == "large"].idxmax()]
+        labs = ["Small photo: R7 gains most over Z", "Small photo: 2nd largest R7 gain",
+                "Large photo: zoom gains most over B0"]
+    else:
+        top = list(g7.index[::-1][:2])
+        zb = [(z - b0).drop(top).idxmax()]
+        labs = ["Photo where R7 gains most over Z", "2nd largest R7 gain over Z", "Photo where zoom gains most over B0"]
+    worst = [c for c in g7.index if c not in top + zb][:1]
+    rows = list(zip(top + zb + worst, labs + ["Photo where R7 loses most to Z"]))
+    b0p = _b0_preds([c for c, _ in rows], ds)
     fig, ax = plt.subplots(len(rows), 4, figsize=(15, 3.9 * len(rows)))
     for i, (c, label) in enumerate(rows):
         with np.load(f"{T}/imgs/{c}") as f:
@@ -271,7 +291,7 @@ def fig_examples():
         x0, y0 = max(int(boxes[:, 0].min()) - pad, 0), max(int(boxes[:, 1].min()) - pad, 0)
         x1, y1 = min(int(boxes[:, 2].max()) + pad, W), min(int(boxes[:, 3].max()) + pad, H)
         panels = [("Ground truth", gt, INK, None), ("B0", b0p[c], COL["B0"], b0.get(c)),
-                  ("Z", _pred("Z", c), COL["Z"], z.get(c)), (f"R7 ({r7})", _pred(r7, c), COL["R7"], r.get(c))]
+                  ("Z", _pred("Z", c, ds), COL["Z"], z.get(c)), (f"R7 ({r7})", _pred(r7, c, ds), COL["R7"], r.get(c))]
         for k, (t, m, colr, d) in enumerate(panels):
             a = ax[i, k]
             a.imshow(img[y0:y1, x0:x1])
@@ -288,10 +308,12 @@ def fig_examples():
         gain = (f"R7 - Z: {r[c] - z[c]:+.2f} DSC" if i != 2 else f"Z - B0: {z[c] - b0[c]:+.2f} DSC")
         ax[i, 0].text(-0.04, 0.5, f"{chr(65 + i)}. {label}\n{gain}  |  {W}x{H} px\n{c[:22]}",
                       transform=ax[i, 0].transAxes, rotation=90, ha="right", va="center", fontsize=10, color=INK)
-    fig.suptitle("Test photos chosen by a fixed rule, not by eye:\n"
-                 "A, B = the 2 small photos where R7 gains most over Z;  C = the large photo where zoom (Z) gains most "
-                 "over B0;  D = the photo where R7 loses most to Z.\n"
-                 f"R7 shown = its median seed on test ({r7}).  Coloured fill = predicted mask; dashed white = given boxes.",
+    rule = ("A, B = the 2 small photos where R7 gains most over Z;  C = the large photo where zoom (Z) gains most "
+            "over B0;  D = the photo where R7 loses most to Z.\n") if by_size else (
+            "A, B = the 2 photos where R7 gains most over Z;  C = the photo where zoom (Z) gains most over B0;  "
+            "D = the photo where R7 loses most to Z.\n")
+    fig.suptitle(f"{_label(ds)}: photos chosen by a fixed rule, not by eye:\n" + rule +
+                 f"R7 shown = its median seed on this set ({r7}).  Coloured fill = predicted mask; dashed white = given boxes.",
                  x=0.01, ha="left", fontsize=12, color=INK)
     fig.tight_layout()
-    _save(fig, "fig5_examples.png")
+    _save(fig, "fig5_examples.png", ds)

@@ -21,6 +21,8 @@ Seed 0 is done for R1, R2, R3, R6 and R7 (validation DSC 0.862 / 0.846 / 0.824 /
 | 3 | R7 extension, if both new R7 seeds cap out (~70 min at most) | – |
 | E | Test set: the new runs, the final tables, and R7 vs R1 | – |
 | F | Figures and the method table for the presentation | – |
+| G | Extra test analyses: zoom ablation, inference cost, error analysis | **R4**: learning-rate check (R4d, R4e) |
+| K | Kvasir-SEG and Kvasir-Instrument forgetting check | – |
 
 Times include about 5 minutes of data preparation and scoring per run.
 
@@ -319,3 +321,60 @@ cf.fig_examples()
 ```
 All PNGs are saved at 200 dpi in `experiments/dental_caries_test63/figures/` on Drive, ready for the slides. Send Claude the E2 tables, the E3 line, the method table and the figures.
 
+
+## Step G — extra analyses on the test set (after Step F; plan fixed 2026-10-20, review file section 12)
+
+Same session as Step F is fine. If it's a new session: daily setup, pip, S0–S1, and S2 without `cr.copy_data()`.
+
+**CPU or GPU:** all three run on CPU. G1 is 6 inference runs on 63 photos without zoom (about 10–15 min on CPU, a few minutes on GPU). G2 measures whatever device the session has, so the table says which; for deployment-like numbers use a GPU session. G3 runs no model at all.
+
+**G0 · Load the module**
+```python
+import importlib, colab_extras as cx
+importlib.reload(cx)
+```
+
+**G1 · Is zoom still needed after training?** Scores R1 and R7 (3 seeds each) on test without zoom, as new runs `<run>_nozoom`, then compares with zoom by photo size.
+```python
+z_abl = cx.zoom_ablation()
+```
+The main line is printed at the end: R7 on the 27 large photos, with vs without zoom. On small photos, "with" and "without" must be identical, because zoom never acts there; if they differ, stop and tell Claude.
+
+**G2 · Inference cost** (seconds per photo for B0, Z, R7 and R1, timed in this session on this device)
+```python
+cost = cx.inference_cost()
+```
+
+**G3 · Where R7 still fails** (correlations with photo size, number of boxes and lesion size; the 10 worst photos; a scatter plot)
+```python
+err, corr = cx.error_analysis()
+```
+Send Claude the three tables and the plot.
+
+## Step K — Kvasir: does dental training hurt LiteMedSAM on other medical images? (plan fixed 2026-10-20)
+
+Uses the Kvasir data **already prepared** in `LiteMedSAM_Baseline_production.ipynb` (official test splits, the datasets' own boxes, binary masks via `pre_rgb_bbox_datasets.py --binary_mask`): Kvasir-SEG (polyps, 120 test images, `data/kvasir_seg/MedSAM_test/RGB_KvasirSeg/`) and Kvasir-Instrument (surgical instruments, 118 test images, `data/kvasir_instruments/MedSAM_test/RGB_KvasirInstruments/`). Nothing is downloaded or converted again, and nothing in those folders is overwritten: the new results get new names (`B0`, `R1_s0`, …); the old `og_ckpt` results stay where they are.
+
+**CPU or GPU:** either. About 240 images × 10 models: roughly 30–60 min on CPU, about 10 min on GPU. Session: daily setup, pip, S0–S1, S2 without `cr.copy_data()`, then G0.
+
+**K1 · Score every model on Kvasir-SEG** (copies the 120 test images to the runtime's disk first; already-scored models are skipped, so re-run the cell after a reset)
+```python
+cx.forgetting_score("kvasir_seg")
+```
+
+**K2 · The forgetting table for Kvasir-SEG** (every model vs B0, per image, Wilcoxon with Holm correction)
+```python
+kv_seg = cx.forgetting_table("kvasir_seg")
+```
+B0 should come out close to your earlier B0 result on this set. If it differs by more than about 0.01 DSC, tell Claude.
+
+**K3 · The same for Kvasir-Instrument**
+```python
+cx.forgetting_score("kvasir_instruments")
+kv_ins = cx.forgetting_table("kvasir_instruments")
+```
+B0 should be close to your earlier 0.905 DSC on this set.
+
+Send Claude both tables.
+
+Limitations of the whole project are listed in the review file, section 13.

@@ -20,6 +20,7 @@ Seed 0 is done for R1, R2, R3, R6 and R7 (validation DSC 0.862 / 0.846 / 0.824 /
 | 2 | **R1 seed 2** (~25 min) | **R1 seed 1** (~25 min) |
 | 3 | – | R7 extension, if both new R7 seeds cap out |
 | E | – | Test set: the new runs, and the final tables |
+| R4 | **Learning-rate check (R4d, R4e)** | G: extra test analyses; K: Kvasir forgetting check |
 
 Your two runs don't depend on anything else, so you can start as soon as Shelly has pushed this file and `colab_runs.py`. Times include about 5 minutes of data preparation and scoring per run.
 
@@ -151,3 +152,40 @@ cr.compare(run)
 cr.board()
 ```
 Send Shelly the "Done. Best validation Dice … at epoch …" line, the `compare` output and the `log.csv` of each run.
+
+## Step R4 — learning-rate check for the LoRA runs (plan fixed 2026-10-20, review file section 12)
+
+Two new runs at 5× the default LoRA learning rate (5e-4 instead of 1e-4), seed 0 each, on a **GPU** runtime. Session: daily setup, pip, S0–S2 (with `cr.copy_data()`). The guards stop you if a name already exists.
+
+**R4d · Train** (= R3 at lr 5e-4, ~15 min). Was R3 only slow to learn?
+```python
+run = cr.train("R4d", 0)
+```
+Check: `Run type: LoRA -> num_epochs 20, patience 5, lr 0.0005`, `LoRA layers: decoder 14, encoder 0`, `trainable: 47,104`.
+
+**R4d · Score, save, compare**
+```python
+run = "R4d_s0"
+cr.score(run, cr.infer_ckpt(run))
+cr.save(run)
+cr.compare(run)
+cr.board()
+```
+
+**R4e · Train** (= R7 at lr 5e-4, up to ~55 min). Does R7 converge sooner or higher?
+```python
+run = cr.train("R4e", 0)
+```
+Check: `Run type: LoRA -> num_epochs 20, patience 5, lr 0.0005`, `LoRA layers: decoder 0, encoder 10`, `trainable: 59,392`.
+
+**R4e · Score, save, compare**
+```python
+run = "R4e_s0"
+cr.score(run, cr.infer_ckpt(run))
+cr.save(run)
+cr.compare(run)
+cr.board()
+```
+Send Shelly the "Done. Best validation Dice … at epoch …" line, the `compare` output and the `log.csv` of each run. These runs are a sensitivity check (a single seed, run after the test set was seen): they are reported as such and don't replace R7.
+
+Limitations of the whole project are listed in the review file, section 13.
