@@ -277,6 +277,52 @@ All training runs use the rewritten `train_one_gpu_multibox.py`: one sample per 
 - **Plan agreed 2026-10-17 (round 2, fixed before any test results were seen):** seeds 1 and 2 for **R1 and R7** (Shelly seed 1, Linoy seed 2). If R7_s1 and R7_s2 both hit the 20-epoch cap, the best R7 seed by validation DSC continues from its best checkpoint for up to 20 more epochs, once, as a new run `R7_s<k>_ext` (Shelly). The five seed-0 models are scored on test now; every round-2 run is scored on test afterwards, whatever it shows; no choice uses test numbers. Cells and safety rules: `Shelly_Training.md`, `Linoy_Training.md`; `colab_runs.py` refuses to overwrite any existing run name on Drive.
 - **Decision 1 (proposed, before R7; superseded by the agreed plan above):** seeds 1 and 2 for R1, R6 and R2 (the same 0.03 rule applied to all four runs, since R1 came out best); R3 dropped (0.038 behind R1, no better than Z). Six runs, about 2–2.5 h of GPU time in total.
 
+**Round 2, validation (2026-10-19): 3 seeds of R1 and R7.**
+
+| Method | Seed 0 | Seed 1 | Seed 2 | Mean ± sd DSC | Mean DSC 20% looser | Best epochs |
+|---|---|---|---|---|---|---|
+| R7 LoRA encoder (59 K weights) | 0.859 | 0.864 | 0.864 | **0.862 ± 0.003** | **0.835 ± 0.006** | 17, 14, 14 (of 20) |
+| R1 full fine-tuning (9.8 M) | 0.862 | 0.838 | 0.856 | 0.852 ± 0.012 | 0.823 ± 0.012 | 1, 0, 3 |
+| Z | | | | 0.820 | 0.728 | |
+
+- R7 is higher on average and about 5x more stable across seeds; 2 of its 3 seeds pass the rule vs Z (R7_s0: p = 0.08), only 1 of R1's 3 does. The R7 vs R1 gap (0.010) is small; the stability difference is the clearer result.
+- R1 peaks after 0-3 epochs and swings between epochs; which epoch is kept is close to chance (and the epoch is chosen by per-lesion Dice, not the reported per-photo DSC). R7 improves smoothly and peaks at epochs 14-17 in every seed.
+- **Extension: not run.** Neither R7_s1 nor R7_s2 was cut off by the cap (both peaked at epoch 14 and early stopping ended them at epoch 19), so the agreed rule says don't extend. 20 epochs is enough for R7.
+- Large vs small photos on validation, from the `compare()` outputs in Shelly's and Linoy's notebooks (8 of the 9 runs: R1_s0, R1_s1, R1_s2, R2_s0, R3_s0, R6_s0, R7_s1, R7_s2; R7_s0's `compare()` output is empty in Linoy's notebook). On the 18 large photos the trained runs are within -0.024 to +0.020 of Z and none passes the rule. On the 24 small photos they gain +0.025 to +0.080, and 6 of the 8 pass; the two that don't are R3_s0 (+0.025) and R1_s1 (+0.041, p = 0.076). Same pattern as on test.
+
+**Cost and accuracy of every method (2026-10-19).** Trainable weights; epochs, seconds per epoch and minutes of training per run, from each run's `log.csv` (Colab T4; excludes about 1 min of data preparation and 1-3 min of scoring; speed varies between sessions and accounts, e.g. R7 ran at 158, 164 and 196 s/epoch in three sessions). Validation: mean over seeds (± sd for 3 seeds). Test: seed 0 only until Step E; the exact, complete table is produced by `colab_figures.method_table()` after Step E.
+
+| Method | Trainable weights | Seeds | Epochs run | s / epoch | Train min / run | Val DSC | Val DSC 20% looser | Test DSC (seed 0) | Test DSC 20% looser (seed 0) |
+|---|---|---|---|---|---|---|---|---|---|
+| B0 zero-shot | 0 | – | – | – | 0 | 0.708 | 0.645 | 0.686 | 0.644 |
+| Z zero-shot + zoom | 0 | – | – | – | 0 | 0.820 | 0.728 | 0.796 | 0.714 |
+| R3 LoRA decoder | 47,104 | 1 | 8 | 106 | 14 | 0.824 | 0.794 | 0.812 | 0.794 |
+| R2 frozen encoders | 4,058,340 | 1 | 6 | 90 | 9 | 0.846 | 0.798 | 0.833 | 0.799 |
+| R6 LoRA enc + dec | 106,496 | 1 | 8 | 160 | 21 | 0.853 | 0.828 | 0.840 | 0.830 |
+| R1 full fine-tuning | 9,791,300 | 3 | 5 / 4 / 7 | 237-273 | 23 / 16 / 30 (mean 23) | 0.852 ± 0.012 | 0.823 | 0.858 | 0.831 |
+| R7 LoRA encoder | 59,392 | 3 | 20 / 20 / 20 | 158-196 | 65 / ~55 / ~53 | **0.862 ± 0.003** | **0.835** | 0.850 | **0.852** |
+
+R7 trains about 2.5x longer per run than R1 (about 53-65 vs 23 min; it never overfits, so early stopping lets it run all 20 epochs) but trains 0.6% of R1's weights and its seeds agree; R1 is fast because it overfits after 1-3 epochs.
+
+**Test set, seed-0 models (2026-10-17, 63 photos; plan for round 2 fixed before these were seen).** `experiments/dental_caries_test63/test_comparison_seed0.csv`.
+
+| Model | DSC as given | NSD | vs Z (wins/losses, gain, Wilcoxon p Holm) | DSC 20% looser | vs Z_p20 gain |
+|---|---|---|---|---|---|
+| B0 (whole photo) | 0.686 | 0.740 | – | 0.644 | – |
+| Z (zoom, no training) | 0.796 | 0.862 | – | 0.714 | – |
+| R1 full fine-tuning | **0.858** | 0.922 | 44/19, +0.062, 0.0005 | 0.831 | +0.116 |
+| R7 LoRA encoder | 0.850 | 0.915 | 39/23, +0.054, 0.006 | **0.852** | **+0.138** |
+| R6 LoRA enc + dec | 0.840 | 0.907 | 39/24, +0.044, 0.022 | 0.830 | +0.116 |
+| R2 frozen encoders | 0.833 | 0.902 | 40/23, +0.037, 0.022 | 0.799 | +0.084 |
+| R3 LoRA decoder | 0.812 | 0.882 | 31/32, +0.017, 0.31 (n.s.) | 0.794 | +0.080 |
+
+- How to read the vs-Z column: wins/losses only counts on how many photos a model scored higher or lower than Z; photos with exactly the same DSC are ties and count in neither (R7: 39 + 23 = 62, so 1 tie; R6: 39 + 24 = 63). The mean gain and the Wilcoxon test also use how large each difference is, which is why R7 and R6 can have the same 39 wins but different gains (+0.054 vs +0.044) and p-values.
+- Same ranking as validation (R1 > R7 > R6 > R2 > R3), and gains over Z at least as large as on validation: no sign that selecting on validation overfitted it.
+- Every model except R3 beats Z significantly after Holm correction; all beat B0 (+0.13 to +0.17 DSC).
+- **Zoom and training are complementary:** on test, the trained models' gain over Z comes from the 36 small photos (+0.06 to +0.10, significant); on the 27 large photos, where zoom already works, gains are +0.01 to +0.02 and not significant (R3 is even worse there, 8/19).
+- **Robustness:** R7 loses nothing with 20% looser boxes (0.850 -> 0.852), while Z drops 0.796 -> 0.714 and B0 0.686 -> 0.644. R7 with loose boxes beats Z with exact boxes.
+- Caveats: one seed per method; R1 vs R7 (0.008) was not tested and is within seed variation (R1_s1 on validation: 0.838 vs R1_s0 0.862). The 3-seed table (Step E) is the result to report.
+
 Skipped under a tight schedule: the learning-rate and rank sweeps (R4, R5, R8) and the training-on-whole-photos ablation (R9). E1 was moved into this list (step 0b) on 2026-10-15.
 
 **E1 decision rules (fixed 2026-10-15, before running).** B0 under loosened boxes is run through `infer_zoom.py -zoom_above 100000` (whole photo, identical to B0), so both methods see exactly the same boxes.

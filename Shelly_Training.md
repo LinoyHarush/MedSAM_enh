@@ -19,7 +19,8 @@ Seed 0 is done for R1, R2, R3, R6 and R7 (validation DSC 0.862 / 0.846 / 0.824 /
 | 1 | **R7 seed 1** (~70 min) | **R7 seed 2** (~70 min) |
 | 2 | **R1 seed 1** (~25 min) | **R1 seed 2** (~25 min) |
 | 3 | R7 extension, if both new R7 seeds cap out (~70 min at most) | – |
-| E | Test set: the new runs, and the final tables | – |
+| E | Test set: the new runs, the final tables, and R7 vs R1 | – |
+| F | Figures and the method table for the presentation | – |
 
 Times include about 5 minutes of data preparation and scoring per run.
 
@@ -242,7 +243,7 @@ A test-set session (skip `cr.copy_data()` in S2).
 **E1 · Score the new runs on test**
 ```python
 TS = cr.TEST
-NEW = ["R7_s1", "R7_s2", "R1_s1", "R1_s2"]          # add "R7_s?_ext" if Step 3 ran
+NEW = ["R7_s1", "R7_s2", "R1_s1", "R1_s2"]          # no extension ran (Step 3a: "Don't extend")
 cr.copy_test_data(NEW)
 for r in NEW:
     cr.score(r, cr.infer_ckpt(r), ds=TS)
@@ -256,4 +257,65 @@ cr.final_table({"R1": ["R1_s0", "R1_s1", "R1_s2"], "R7": ["R7_s0", "R7_s1", "R7_
 t = cr.test_table(["R1_s0", "R1_s1", "R1_s2", "R7_s0", "R7_s1", "R7_s2"] + [r for r in NEW if r.endswith("_ext")],
                   out_name="test_comparison_final.csv")
 ```
-`final_table` gives the mean ± sd over the 3 seeds of R1 and R7 (the main result); `test_table` gives every seed against Z and B0. If the extension ran, report it as its own row ("best R7 seed, trained longer"), not as R7's average. Send Claude both tables.
+`final_table` gives the mean ± sd over the 3 seeds of R1 and R7 (the main result); `test_table` gives every seed against Z and B0. If the extension ran, report it as its own row ("best R7 seed, trained longer"), not as R7's average.
+
+**E3 · R7 vs R1, directly** (fixed on 2026-10-19 before any round-2 test result was seen; run once, report as is)
+
+For each test photo, each method's DSC is averaged over its 3 seeds; then a two-sided Wilcoxon test compares R7 with R1. Boxes as given is the main comparison, 20% looser is secondary.
+```python
+from compare_paired import summarize
+def seed_mean(runs, suf=""):
+    m = None
+    for r in runs:
+        d = cr.load(r + suf, TS)[["case", "dsc"]].rename(columns={"dsc": r})
+        m = d if m is None else m.merge(d, on="case")
+    return m.set_index("case").mean(axis=1)
+R7, R1 = ["R7_s0", "R7_s1", "R7_s2"], ["R1_s0", "R1_s1", "R1_s2"]
+for suf, label in [("", "as given (main)"), ("_p20", "20% looser")]:
+    a, b = seed_mean(R7, suf), seed_mean(R1, suf)
+    k = summarize((a - b.loc[a.index]).to_numpy(), 0.03, 0.05)
+    print(f"R7 vs R1, {label}: DSC {a.mean():.3f} vs {b.mean():.3f} | wins/losses {k['wins']}/{k['losses']} | "
+          f"mean {k['mean_diff']:+.3f} | Wilcoxon p {k['wilcoxon_p']:.4f}")
+```
+
+## Step F — figures and the method table (after Step E, same session)
+
+Everything here only **reads** scores, logs and predictions from Drive, and only **writes** new files into `experiments/dental_caries_test63/figures/` on Drive. Run in the same session as Step E (the test photos must be on the runtime's disk for F6).
+
+**F1 · Load the figures module**
+```python
+import importlib, colab_figures as cf
+importlib.reload(cf)
+```
+
+**F2 · The method table** (trainable weights, epochs, training time per run from the logs, validation and test DSC/NSD with sd over seeds, DSC with 20% looser boxes)
+```python
+t = cf.method_table()          # also saved as figures/method_table.csv
+```
+
+**F3 · Overview: every method on test (boxes as given)**: B0 → Z → the trained models; R1 and R7 are 3-seed means with the seed range
+```python
+cf.fig_overview()
+```
+
+**F4 · Large vs small photos**: zoom lifts the large photos, training the small ones (B0, Z, R1, R7)
+```python
+cf.fig_size_groups()
+```
+
+**F5 · Robustness**: each method with the boxes as given vs 20% looser
+```python
+cf.fig_robustness()
+```
+
+**F6 · Training curves**: validation Dice per epoch, 3 seeds of R1 vs 3 seeds of R7 (dot = the epoch that was kept)
+```python
+cf.fig_training_curves()
+```
+
+**F7 · Example photos**: ground truth, B0, Z and R7, four rows chosen by a fixed rule (not by eye): the 2 small photos where R7 gains most over Z, the large photo where zoom gains most over B0, and the photo where R7 loses most to Z. R7 = its median seed on test. B0's masks are recomputed for these 4 photos if they aren't stored (a few seconds).
+```python
+cf.fig_examples()
+```
+All PNGs are saved at 200 dpi in `experiments/dental_caries_test63/figures/` on Drive, ready for the slides. Send Claude the E2 tables, the E3 line, the method table and the figures.
+
