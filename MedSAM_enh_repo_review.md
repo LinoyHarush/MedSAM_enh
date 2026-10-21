@@ -444,6 +444,25 @@ Code fixes after Step F (colab_figures.py, 2026-10-21):
 Re-run `cf.method_table()`, `cf.fig_overview()` and `cf.fig_training_curves()` after a pull; this overwrites only those three files in `figures/`, which are derived from results that don't change.
 
 
+## 12b. R4 results: learning-rate sensitivity (validation, seed 0, run 2026-10-21)
+
+Post hoc (run after the test set was seen), single seed: a sensitivity check, not a new method. Neither run is scored on test.
+
+| Run | What changed | lr | Epochs run / kept | s per epoch | Val DSC | Val DSC 20% looser (drop) | vs Z (sign p) |
+|---|---|---|---|---|---|---|---|
+| R3_s0 | LoRA decoder | 1e-4 | 8 / 2 | 106 | 0.824 | 0.794 (−0.030) | +0.004 (0.92) |
+| **R4d_s0** | LoRA decoder | **5e-4** | 7 / 1 | 94 | **0.846** | 0.792 (−0.053) | +0.026 (0.22) |
+| R2_s0 (reference) | whole decoder, encoders frozen | 5e-5 | 6 / 1 | 90 | 0.846 | 0.798 (−0.048) | +0.026 (0.14) |
+| R7_s0–s2 | LoRA encoder | 1e-4 | 20 / 14–17 | 173 | 0.859–0.864 | 0.830–0.842 (−0.018 to −0.034) | +0.040 to +0.044 |
+| **R4e_s0** | LoRA encoder | **5e-4** | 11 / 5 | 168 | **0.856** | 0.832 (−0.025) | +0.037 (0.044) |
+
+Against the rules fixed in section 12:
+- **R4d vs R3: +0.022, below the 0.03 threshold**, so we can't say R3 was held back by its learning rate. A single seed moves by about this much on its own (R1's three seeds span 0.838–0.862). A 5× higher lr lets the decoder adapters reach the level of training the whole decoder (R2, 0.846, the same number), in one epoch, and then validation Dice falls. With looser boxes R4d is the least robust trained run (−0.053), like R2.
+- **R4e vs R7: 0.856, just below R7's seed range (0.859–0.864)**: a 5× higher lr doesn't help encoder LoRA. It gets there faster (kept epoch 5 instead of 14–17, 31 min instead of 58), but to the same level: the trainer's per-lesion validation Dice peaks at 0.787 vs about 0.786–0.789 for R7's seeds (read off fig4). Robustness to looser boxes is in R7's range.
+
+What it means for the report: **R7's lead over R3 is not an artefact of the learning rate.** Raising it brings decoder-only LoRA up to the level of training the whole decoder (0.846), not to encoder LoRA (≥ 0.856). Where the adapters sit matters more than how fast they learn. For R7, lr 1e-4 was not holding it back; 5e-4 would only have saved training time. Both are single seeds and validation only.
+
+
 ## 13. Limitations
 
 1. **Small evaluation sets.** 42 validation and 63 test photos. A single run's difference below about 0.03 DSC is within noise; that is why decisions use seeds and paired per-photo tests.

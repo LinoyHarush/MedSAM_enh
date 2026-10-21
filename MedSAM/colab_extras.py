@@ -245,7 +245,9 @@ def forgetting_table(ds):
 def check_alphadent(src, ds="alphadent_valid", split="valid", n_png=10, n_show=4, seed=0):
     """Checks that our converted masks mean the same as AlphaDent's own labels, before any model is run.
     (a) counts from photos.csv; (b) our caries mask vs the union of AlphaDent's own caries PNG masks, per photo
-    (IoU should be ~1; a size mismatch means a rotation problem); (c) every box contains caries pixels;
+    (IoU should be ~1; a size mismatch means a rotation problem); if the archive has no PNG masks (the Zenodo
+    archive doesn't): (b1) no photo carries an EXIF rotation and (b2) all label coordinates lie in [0, 1];
+    (c) every box contains caries pixels;
     (d) an overlay figure of n_show photos (photo, our caries mask, boxes) to look at by eye."""
     import glob
     import re as _re
@@ -277,10 +279,36 @@ def check_alphadent(src, ds="alphadent_valid", split="valid", n_png=10, n_show=4
         else:
             inter, union = (ours & theirs).sum(), (ours | theirs).sum()
             ious.append(inter / union if union else 1.0)
-    print(f"(b) our caries mask vs AlphaDent's caries PNGs on {len(ious)} photos: IoU min {min(ious):.3f}, "
-          f"median {np.median(ious):.3f}" if ious else "(b) no comparison possible")
-    for n in notes:
-        print("    ", n)
+    if ious:
+        print(f"(b) our caries mask vs AlphaDent's caries PNGs on {len(ious)} photos: IoU min {min(ious):.3f}, "
+              f"median {np.median(ious):.3f}")
+        for n in notes:
+            print("    ", n)
+    else:
+        print(f"(b) AlphaDent's PNG masks are not in this archive ({len(notes)} of {len(cases)} photos checked have none),"
+              " so instead: (b1) orientation and (b2) label coordinates")
+    # (b1) The YOLO polygons refer to the photo as YOLO tools load it, i.e. after EXIF rotation; we read the pixels as
+    # stored. The two agree only if no photo carries an EXIF rotation (orientation tag missing or 1).
+    from PIL import Image
+    img_root = [p for p in Path(src).rglob(split) if p.is_dir() and p.parent.name == "images"][0]
+    orient = {}
+    for c, name in zip(kept.case, kept.image):
+        with Image.open(img_root / name) as im:
+            orient[c] = int(im.getexif().get(274, 1) or 1)
+    rotated = [c for c, o in orient.items() if o != 1]
+    print(f"(b1) EXIF orientation: {len(orient) - len(rotated)} of {len(orient)} photos unrotated (tag missing or 1)"
+          + ("" if not rotated else f"; ROTATED: {len(rotated)} -> "
+             + ", ".join(f"{c[:-4]} (tag {orient[c]})" for c in rotated[:8])
+             + ". STOP and tell Claude: labels and pixels may disagree on these"))
+    # (b2) Normalised YOLO coordinates must lie in [0, 1]; values outside mean the labels use another convention.
+    out_of_range, n_coords = 0, 0
+    for name in kept.image:
+        for line in (lab_root / f"{Path(name).stem}.txt").read_text().split("\n"):
+            v = line.split()
+            if len(v) >= 7:
+                xy = np.array(v[1:], dtype=float)
+                n_coords += len(xy); out_of_range += int(((xy < -1e-6) | (xy > 1 + 1e-6)).sum())
+    print(f"(b2) label coordinates outside [0, 1]: {out_of_range} of {n_coords} (expect 0)")
     bad = 0
     for c in kept.case:
         with np.load(f"{T}/imgs/{c}") as f:
@@ -288,7 +316,8 @@ def check_alphadent(src, ds="alphadent_valid", split="valid", n_png=10, n_show=4
         gt = np.load(f"{T}/gts/{c}")["gts"] > 0
         bad += sum(not gt[b[1]:b[3] + 1, b[0]:b[2] + 1].any() for b in boxes)
     print(f"(c) boxes with no caries pixels inside: {bad} (expect 0)")
-    show = list(rng.choice(kept.case.values, size=min(n_show, len(kept)), replace=False))
+    show = rotated[:2] + [c for c in rng.choice(kept.case.values, size=min(n_show, len(kept)), replace=False)
+                          if c not in rotated][:n_show - len(rotated[:2])]   # rotated photos first, if any
     fig, ax = plt.subplots(1, len(show), figsize=(5 * len(show), 4.5))
     for a, c in zip(np.atleast_1d(ax), show):
         with np.load(f"{T}/imgs/{c}") as f:

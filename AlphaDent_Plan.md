@@ -127,11 +127,19 @@ ious = cx.check_alphadent("/content/alphadent", ds=AD, split="valid")
 | Check | Pass if |
 |---|---|
 | (a) counts | photos and caries boxes as in AD4 |
-| (b) our binary caries mask vs AlphaDent's own caries PNG masks, 10 random photos | IoU median ≥ 0.98 and no "ROTATION/SIZE MISMATCH" line. A mismatch means the photos and labels disagree on orientation: stop and tell Claude |
+| (b) our binary caries mask vs AlphaDent's own caries PNG masks, 10 random photos | IoU median ≥ 0.98 and no "ROTATION/SIZE MISMATCH" line. A mismatch means the photos and labels disagree on orientation: stop and tell Claude. **The Zenodo archive has no PNG masks** (only `images/` and `labels/`), so (b) is replaced by (b1) and (b2) |
+| (b1) EXIF orientation of every kept photo | all unrotated (tag missing or 1). YOLO labels refer to the photo after EXIF rotation, while we read the pixels as stored; they agree only if no photo is rotated. Any "ROTATED" line: stop and tell Claude |
+| (b2) label coordinates | 0 outside [0, 1] |
 | (c) boxes with no caries pixels | 0 |
 | (d) the overlay figure (`experiments/alphadent_valid/figures/check_conversion.png`) | green masks sit on carious spots, and every dashed box surrounds one |
 
-Only go on to AD6 if all four pass.
+Only go on to AD6 if all of them pass.
+
+**Status (2026-10-21, CPU session):**
+- AD1: one archive, `AlphaDent.zip`, 4.88 GB, licence CC-BY-4.0. It's now also on Drive in `data/raw/alphadent/`.
+- AD3: classes as expected (0 Abrasion, 1 Filling, 2 Crown, 3–8 Caries 1–6).
+- AD4: 83 photos read, 64 with caries written, 19 without caries skipped. **258 caries boxes, exactly the paper's 258 caries instances on `valid`**; 0 tiny instances dropped; long side median 5,472 px, all 64 above 2,000 px.
+- AD5: (a) passed. (b) found no PNG masks. (c) and (d) didn't print in that run. Re-run AD5 after pulling the new `colab_extras.py` (b1/b2 added) and check (b1), (b2), (c) and (d).
 
 ### AD6 · Inference and scoring (GPU recommended)
 Runs:
