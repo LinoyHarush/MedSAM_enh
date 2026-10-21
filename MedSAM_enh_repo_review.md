@@ -290,6 +290,20 @@ All training runs use the rewritten `train_one_gpu_multibox.py`: one sample per 
 - **Extension: not run.** Neither R7_s1 nor R7_s2 was cut off by the cap (both peaked at epoch 14 and early stopping ended them at epoch 19), so the agreed rule says don't extend. 20 epochs is enough for R7.
 - Large vs small photos on validation, from the `compare()` outputs in Shelly's and Linoy's notebooks (8 of the 9 runs: R1_s0, R1_s1, R1_s2, R2_s0, R3_s0, R6_s0, R7_s1, R7_s2; R7_s0's `compare()` output is empty in Linoy's notebook). On the 18 large photos the trained runs are within -0.024 to +0.020 of Z and none passes the rule. On the 24 small photos they gain +0.025 to +0.080, and 6 of the 8 pass; the two that don't are R3_s0 (+0.025) and R1_s1 (+0.041, p = 0.076). Same pattern as on test.
 
+**Final test result, 3 seeds of R1 and R7 (Step E, 2026-10-20, 63 test photos; plan fixed before these were seen).** `experiments/dental_caries_test63/test_comparison_final.csv`.
+
+| Model | DSC as given (mean ± sd over seeds) | NSD | DSC 20% looser |
+|---|---|---|---|
+| B0 (og_ckpt) | 0.686 | 0.740 | 0.644 |
+| Z | 0.796 | 0.862 | 0.714 |
+| R1 full fine-tuning, 3 seeds | 0.851 ± 0.008 | 0.917 | 0.825 ± 0.009 |
+| **R7 LoRA encoder, 3 seeds** | **0.853 ± 0.003** | **0.918** | **0.847 ± 0.005** |
+
+- Every one of the six runs beats Z (Wilcoxon, Holm-corrected p ≤ 0.007; +0.047 to +0.062 DSC) and B0 (+0.157 to +0.172).
+- **R7 vs R1, per-photo means of 3 seeds (fixed in advance):** boxes as given +0.002 DSC, 36/27 photos, Wilcoxon p = 0.69: **no difference in accuracy**. With 20% looser boxes +0.022, 50/13 photos, p < 0.0001: **R7 is clearly more robust to imprecise boxes.**
+- Conclusion: with the boxes as given, encoder LoRA (59 K trained weights) is as accurate as full fine-tuning (9.8 M), with seeds that agree about 2.5x more closely (sd 0.003 vs 0.008), and it holds up much better when the boxes are loose (R7 loses 0.006 DSC, R1 0.026).
+- Z was re-scored in this session with the same result as before (0.796), a reproducibility check.
+
 **Cost and accuracy of every method (2026-10-19).** Trainable weights; epochs, seconds per epoch and minutes of training per run, from each run's `log.csv` (Colab T4; excludes about 1 min of data preparation and 1-3 min of scoring; speed varies between sessions and accounts, e.g. R7 ran at 158, 164 and 196 s/epoch in three sessions). Validation: mean over seeds (± sd for 3 seeds). Test: seed 0 only until Step E; the exact, complete table is produced by `colab_figures.method_table()` after Step E.
 
 | Method | Trainable weights | Seeds | Epochs run | s / epoch | Train min / run | Val DSC | Val DSC 20% looser | Test DSC (seed 0) | Test DSC 20% looser (seed 0) |
