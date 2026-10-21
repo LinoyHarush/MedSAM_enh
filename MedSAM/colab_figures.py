@@ -81,6 +81,17 @@ def _save(fig, name, ds=None):
 
 
 # ------------------------------------------------------------------ table
+def _kept_epoch(log, min_delta=1e-3):
+    """The epoch the trainer kept (its best-val checkpoint): a gain counts only if val Dice > best + min_delta,
+    the same rule as train_one_gpu_multibox.py and cr.capped(). Not the plain argmax: R3's argmax is epoch 7,
+    but its gain there was below min_delta, so the kept checkpoint is from epoch 2."""
+    best, best_ep = -1.0, int(log.epoch.iloc[0])
+    for ep, d in zip(log.epoch, log.val_dice):
+        if d > best + min_delta:
+            best, best_ep = d, int(ep)
+    return best_ep
+
+
 def method_table():
     """One row per method: trainable weights, epochs and training minutes per run (from the logs on Drive),
     validation and test DSC (mean ± sd over seeds), and DSC with 20% looser boxes. Saved as method_table.csv."""
@@ -91,7 +102,7 @@ def method_table():
             logs = [pd.read_csv(f"{cr.RUNS_D}/{r}/log.csv") for r in SEEDS[m]]
             row.update({"seeds": len(logs),
                         "epochs run": "/".join(str(len(l)) for l in logs),
-                        "best epoch": "/".join(str(int(l.epoch[l.val_dice.idxmax()])) for l in logs),
+                        "best epoch": "/".join(str(_kept_epoch(l)) for l in logs),
                         "s per epoch": round(np.mean([l.seconds.mean() for l in logs])),
                         "train min per run": round(np.mean([l.seconds.sum() for l in logs]) / 60, 1)})
         else:
@@ -148,8 +159,10 @@ def fig_overview(ds=None):
     for i, (b, v) in enumerate(zip(bars, means)):         # label above the error bar where there is one
         ax.text(b.get_x() + b.get_width() / 2, v + hi[i] + 0.006, f"{v:.3f}", ha="center", va="bottom",
                 fontsize=10, color=INK)
-    ax.set_xticks(x, [NAMES[m].replace(" ", "\n", 1) + ("\n(3 seeds)" if m in ("R1", "R7") else
-                      "\n(1 seed)" if m in SEEDS else "") for m in order], fontsize=9.5)
+    import textwrap                                        # wrap long names so neighbouring labels don't touch
+    ax.set_xticks(x, [NAMES[m].split(" ", 1)[0] + "\n" + textwrap.fill(NAMES[m].split(" ", 1)[1], 13, break_on_hyphens=False)
+                      + ("\n(3 seeds)" if m in ("R1", "R7") else "\n(1 seed)" if m in SEEDS else "")
+                      for m in order], fontsize=9.5)
     lo_y = max(0.0, np.floor((min(means) - 0.08) * 10) / 10)
     ax.set_ylim(lo_y, max(0.9, max(means) + 0.05)); ax.set_ylabel("Mean DSC per photo")
     ax.set_title(f"{_label(ds)}: every method, boxes as given", loc="left", fontsize=13, color=INK)
@@ -214,11 +227,12 @@ def fig_training_curves():
         for k, r in enumerate(SEEDS[m]):
             l = pd.read_csv(f"{cr.RUNS_D}/{r}/log.csv")
             ax.plot(l.epoch, l.val_dice, color=COL[m], linewidth=2, alpha=[1, 0.7, 0.45][k], label=f"seed {k}")
-            b = l.val_dice.idxmax()
+            b = l.index[l.epoch == _kept_epoch(l)][0]
             ax.plot(l.epoch[b], l.val_dice[b], "o", color=COL[m], markersize=8, markeredgecolor="white",
                     markeredgewidth=2)
         ax.set_title(NAMES[m], loc="left", fontsize=12, color=INK)
         ax.set_xlabel("epoch"); ax.legend(frameon=False, fontsize=9)
+        ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
     axes[0].set_ylabel("Validation Dice (per lesion)")
     fig.suptitle("Full fine-tuning peaks early and swings; encoder LoRA improves steadily (dot = kept epoch)",
                  x=0.01, ha="left", fontsize=12.5, color=INK)
@@ -254,10 +268,13 @@ def _b0_preds(cases, ds=None):
     return out
 
 
-def fig_examples(ds=None):
+def fig_examples(ds=None, closeup=False):
     """Rows chosen by rule, not by eye. Dental test set: the 2 small photos where R7 gains most over Z, the large photo
     where Z gains most over B0, and the photo where R7 loses most to Z. Other sets (e.g. AlphaDent, all photos large):
-    the same rule without the size condition. R7 = its median seed on that set (no cherry-picking)."""
+    the same rule without the size condition. R7 = its median seed on that set (no cherry-picking).
+    closeup=True: the same rows, each cropped tightly around ONE box (its size again on every side, at least 40 px),
+    saved as fig5b_examples_closeup.png. With several boxes in a photo, the box shown is the one where the R7 and Z
+    masks differ in the most pixels (a fixed rule); the ground-truth title says which box of how many."""
     _style()
     ds = ds or cr.TEST
     by_size = ds == cr.TEST
@@ -287,14 +304,27 @@ def fig_examples(ds=None):
             img, boxes = f["imgs"], np.asarray(f["boxes"]).reshape(-1, 4)
         gt = np.load(f"{T}/gts/{c}")["gts"] > 0
         H, W = gt.shape[:2]
-        pad = int(0.08 * max(H, W))
-        x0, y0 = max(int(boxes[:, 0].min()) - pad, 0), max(int(boxes[:, 1].min()) - pad, 0)
-        x1, y1 = min(int(boxes[:, 2].max()) + pad, W), min(int(boxes[:, 3].max()) + pad, H)
-        panels = [("Ground truth", gt, INK, None), ("B0", b0p[c], COL["B0"], b0.get(c)),
-                  ("Z", _pred("Z", c, ds), COL["Z"], z.get(c)), (f"R7 ({r7})", _pred(r7, c, ds), COL["R7"], r.get(c))]
+        pz, p7 = _pred("Z", c, ds), _pred(r7, c, ds)
+        which = ""
+        if closeup:
+            if len(boxes) > 1 and pz is not None and p7 is not None:
+                diff = [int((pz[b[1]:b[3] + 1, b[0]:b[2] + 1] != p7[b[1]:b[3] + 1, b[0]:b[2] + 1]).sum()) for b in boxes]
+                k = int(np.argmax(diff))
+            else:
+                k = 0
+            bx0, by0, bx1, by1 = (int(v) for v in boxes[k])
+            pad = max(bx1 - bx0, by1 - by0, 40)
+            x0, y0, x1, y1 = max(bx0 - pad, 0), max(by0 - pad, 0), min(bx1 + pad, W), min(by1 + pad, H)
+            which = f" (box {k + 1} of {len(boxes)})" if len(boxes) > 1 else ""
+        else:
+            pad = int(0.08 * max(H, W))
+            x0, y0 = max(int(boxes[:, 0].min()) - pad, 0), max(int(boxes[:, 1].min()) - pad, 0)
+            x1, y1 = min(int(boxes[:, 2].max()) + pad, W), min(int(boxes[:, 3].max()) + pad, H)
+        panels = [("Ground truth" + which, gt, INK, None), ("B0", b0p[c], COL["B0"], b0.get(c)),
+                  ("Z", pz, COL["Z"], z.get(c)), (f"R7 ({r7})", p7, COL["R7"], r.get(c))]
         for k, (t, m, colr, d) in enumerate(panels):
             a = ax[i, k]
-            a.imshow(img[y0:y1, x0:x1])
+            a.imshow(img[y0:y1, x0:x1], interpolation="nearest" if closeup else "antialiased")
             if m is not None:
                 ov = np.zeros((y1 - y0, x1 - x0, 4))
                 rgb = tuple(int(colr[j:j + 2], 16) / 255 for j in (1, 3, 5))
@@ -303,6 +333,7 @@ def fig_examples(ds=None):
             for bx in boxes:
                 a.add_patch(plt.Rectangle((bx[0] - x0, bx[1] - y0), bx[2] - bx[0], bx[3] - bx[1], fill=False,
                                           edgecolor="white", linewidth=1.2, linestyle="--"))
+            a.set_xlim(-0.5, x1 - x0 - 0.5); a.set_ylim(y1 - y0 - 0.5, -0.5)   # boxes outside the crop stay hidden
             a.set_title(t + ("" if d is None else f"  DSC {d:.2f}"), fontsize=11, color=INK)
             a.axis("off")
         gain = (f"R7 - Z: {r[c] - z[c]:+.2f} DSC" if i != 2 else f"Z - B0: {z[c] - b0[c]:+.2f} DSC")
@@ -313,7 +344,8 @@ def fig_examples(ds=None):
             "A, B = the 2 photos where R7 gains most over Z;  C = the photo where zoom (Z) gains most over B0;  "
             "D = the photo where R7 loses most to Z.\n")
     fig.suptitle(f"{_label(ds)}: photos chosen by a fixed rule, not by eye:\n" + rule +
-                 f"R7 shown = its median seed on this set ({r7}).  Coloured fill = predicted mask; dashed white = given boxes.",
+                 f"R7 shown = its median seed on this set ({r7}).  Coloured fill = predicted mask; dashed white = given boxes."
+                 + ("\nClose-ups: each row cropped around one box; DSC values are still for the whole photo." if closeup else ""),
                  x=0.01, ha="left", fontsize=12, color=INK)
-    fig.tight_layout()
-    _save(fig, "fig5_examples.png", ds)
+    fig.tight_layout(rect=(0, 0, 1, 0.975)) if closeup else fig.tight_layout()   # room for the 4-line title
+    _save(fig, "fig5b_examples_closeup.png" if closeup else "fig5_examples.png", ds)

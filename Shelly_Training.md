@@ -319,6 +319,12 @@ cf.fig_training_curves()
 ```python
 cf.fig_examples()
 ```
+
+**F7b · Close-ups of the same four photos** (added 2026-10-21): in F7 the lesions on the large photos (rows C, D) are only a few pixels wide at the figure's scale. This draws the same rows, each cropped to one box with the box's own size as margin on every side, so the masks are visible on a slide. When a photo has several boxes, it shows the one where R7 and Z differ most (a fixed rule; the ground-truth title says "box k of n"). DSC values in the titles are still for the whole photo. Saved as `fig5b_examples_closeup.png`; F7's figure is not touched.
+```python
+importlib.reload(cf)          # after a pull: picks up the new option
+cf.fig_examples(closeup=True)
+```
 All PNGs are saved at 200 dpi in `experiments/dental_caries_test63/figures/` on Drive, ready for the slides. Send Claude the E2 tables, the E3 line, the method table and the figures.
 
 

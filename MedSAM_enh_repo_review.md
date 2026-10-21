@@ -412,6 +412,38 @@ Cells: `Shelly_Training.md` (Steps G and K), `Linoy_Training.md` (Step R4) and `
 **AlphaDent (E3)**: the full plan, with cells, checks and time per step, is in `AlphaDent_Plan.md` (repo root). Inference only; estimated effort about half a day to a day.
 
 
+## 12a. Step F: method table and figures 1–5, what they show (2026-10-21)
+
+Source: `experiments/dental_caries_test63/figures/` (method_table.csv, fig1–fig5). Test = 63 photos, validation = per-photo DSC on the validation split.
+
+| Method | Trainable weights | Train min / run | Val DSC | Test DSC (sd over seeds) | Test NSD | Drop with 20% looser boxes: val / test |
+|---|---|---|---|---|---|---|
+| B0 zero-shot | 0 | – | 0.708 | 0.686 | 0.740 | −0.063 / −0.041 |
+| Z zero-shot + zoom | 0 | – | 0.820 | 0.796 | 0.862 | −0.092 / −0.081 |
+| R3 LoRA decoder | 47 k | 14 | 0.824 | 0.812 | 0.882 | −0.030 / −0.018 |
+| R2 frozen encoders | 4.06 M | 9 | 0.846 | 0.833 | 0.902 | −0.048 / −0.034 |
+| R6 LoRA enc+dec | 106 k | 21 | 0.853 | 0.839 | 0.907 | −0.024 / −0.009 |
+| R1 full fine-tuning | 9.79 M | 23 | 0.852 | 0.851 (0.008) | 0.917 | −0.029 / −0.027 |
+| R7 LoRA encoder | 59 k | 58 | 0.862 | 0.853 (0.003) | 0.918 | −0.028 / −0.007 |
+
+What holds up:
+1. **Nearly the same order on validation and test** (only R6 and R1 swap; they are 0.001 apart on validation). Every method is 0.00–0.02 lower on test, the zero-shot ones most. Nothing was tuned on test, so this is the expected small gap.
+2. **Zoom and training fix different photos** (fig2): large photos B0 0.57 → Z 0.83 → R1 0.84 / R7 0.85; small photos B0 = Z = 0.77 → R1 / R7 0.86. Zoom gives almost all the gain on large photos; training gives almost all of it on small ones.
+3. **R7 ≈ R1 in accuracy at 1/165 of the trainable weights**, and R7's seeds agree more closely (test sd 0.003 vs 0.008; validation 0.003 vs 0.012).
+4. **Training curves** (fig4): R1's kept epoch is 0/1/3 and its validation Dice swings by ±0.03 between epochs; R7 climbs steadily and keeps epoch 14/14/17. R7 costs more training time (20 epochs × 173 s vs ~5 × 255 s), not more per epoch. Note: fig4's y-axis is the trainer's per-lesion Dice, not the per-photo DSC of the tables, so its values are lower; say so on the slide.
+
+What needs a caveat:
+5. **The robustness gap between R7 and R1 is a test-set result only.** On test R7 loses 0.007 with looser boxes and R1 0.027 (R7 vs R1 with looser boxes: +0.022, p < 0.0001). On validation both lose the same (−0.028 vs −0.029); R7 stays higher there only because it starts higher. Report it as "on the test set R7 was more robust; on validation the two lost equally", not as a general property of LoRA. The same goes for any "LoRA models are more robust" reading: R3 and R6 (one seed each) are not consistently better than R1 on validation.
+6. **Zoom makes the zero-shot model more sensitive to loose boxes** (Z −0.081 vs B0 −0.041 on test, same on validation): with a looser box the crop grows, and the untrained model segments more of the surrounding tooth. Training removes most of this (all trained models lose ≤ 0.048).
+7. **Examples** (fig5, rows chosen by rule): A and B are small photos where B0 = Z (zoom doesn't act) and R7 captures the whole dark cavity (0.28 → 0.94, 0.43 → 0.71); in B, R7's mask is close to the box itself. C is a 4000 × 6000 photo where B0 gets 0.00 (the lesion is about one pixel at 256 px) and zoom alone fixes it (0.82; R7 0.80). D is R7's worst loss to Z (0.72 vs 0.88), on a photo with two tiny lesions. In C and D the lesions are too small to judge at the figure's scale: use `cf.fig_examples(closeup=True)` (Step F7b), which crops each row to one box and saves `fig5b_examples_closeup.png`.
+
+Code fixes after Step F (colab_figures.py, 2026-10-21):
+- The "best epoch" column used the plain argmax of validation Dice. It now replays the trainer's rule (a gain counts only if it is above the best by 0.001), the same as `cr.capped()`. Only R3 changes: 7 → **2** (its later peak was within 0.001 of epoch 2, so the kept checkpoint is from epoch 2). R1, R2, R6 and R7 are unchanged. Fig4 dots use the same rule (no visible change); fig4's x-axis now shows whole epochs.
+- Fig1: the x labels "Z zero-shot + zoom" and "R3 LoRA decoder" overlapped; names are now wrapped onto two lines.
+
+Re-run `cf.method_table()`, `cf.fig_overview()` and `cf.fig_training_curves()` after a pull; this overwrites only those three files in `figures/`, which are derived from results that don't change.
+
+
 ## 13. Limitations
 
 1. **Small evaluation sets.** 42 validation and 63 test photos. A single run's difference below about 0.03 DSC is within noise; that is why decisions use seeds and paired per-photo tests.
