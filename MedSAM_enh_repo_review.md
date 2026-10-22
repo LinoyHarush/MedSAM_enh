@@ -463,6 +463,31 @@ Against the rules fixed in section 12:
 What it means for the report: **R7's lead over R3 is not an artefact of the learning rate.** Raising it brings decoder-only LoRA up to the level of training the whole decoder (0.846), not to encoder LoRA (≥ 0.856). Where the adapters sit matters more than how fast they learn. For R7, lr 1e-4 was not holding it back; 5e-4 would only have saved training time. Both are single seeds and validation only.
 
 
+## 12c. G and K results (test set and Kvasir, run 2026-10-21/22, CPU)
+
+**G1 · Zoom after training (primary, fixed in advance: R7, large photos).** R7 on the 27 large test photos: 0.850 with zoom vs 0.686 without, **+0.164, better on 25 of 27, Wilcoxon p < 0.0001**. R1: +0.156 (25/2). Untrained (Z vs B0): +0.257. The 36 small photos came out identical with and without zoom, as they must (the built-in check passed). Without zoom, training lifts the large photos only from 0.569 (B0) to 0.686, while zoom alone reaches 0.826. **Zoom remains necessary after training.** Caveat (section 12): the trained models saw large photos only as crops during training, so this says "our pipeline needs zoom", not "training on whole photos couldn't replace it".
+
+**G2 · Inference cost (CPU, one session).** Seconds per photo, mean / median: B0 10.6 / 7.6, Z 10.7 / 7.8, R7 10.8 / 8.0, R1 10.3 / 7.8; large and small photos alike. **In our pipeline, zoom and LoRA add no measurable cost.** LoRA is merged into the weights. Zoom runs the encoder once per box, but so does our B0, which also encodes once per box. Most of the ~10 s is loading the photo and resizing and saving full-resolution masks. Honest note: a whole-photo pipeline that encodes once per photo and reuses the embedding for all its boxes would need fewer encoder passes (181 boxes on 63 photos, 2.9 per photo), so zoom's real extra cost is at most about 2.9 encoder passes per photo. Absolute CPU times aren't deployment numbers.
+
+**G3 · Where R7 still fails.** No photo feature is significantly related to R7's DSC. The strongest are box side at 256 px without zoom (ρ = 0.25, p = 0.052) and number of boxes (ρ = −0.21, p = 0.10), with five features tested and no correction. The 10 worst photos are 4 large and 6 small, in proportion to the set (27/36). On 7 of them R7 still beats Z, so they are hard for every method. R7's 3 losses among them (photos 1699, 697, 1112) are all large photos, where zoom already did most of the work. Limitation of G3: its lesion-size column ignores the zoom on large photos; H3 (Step H) measures lesion size as R7 saw it.
+
+**K · Forgetting on Kvasir (every model vs B0, Wilcoxon, Holm).**
+
+| Model | Kvasir-SEG (B0 0.952) | Kvasir-Instrument (B0 0.917) |
+|---|---|---|
+| R1 full fine-tuning (mean of 3 seeds) | −0.086, all 3 seeds significant | −0.101, all 3 seeds significant |
+| R2 frozen encoders | −0.073 (sig.) | −0.056 (sig.) |
+| R7 LoRA encoder (mean of 3 seeds) | −0.065, all 3 seeds significant | **−0.008, no seed significant** (Holm p 0.18–0.35) |
+| R6 LoRA enc+dec | −0.040 (sig.) | +0.018 (n.s.) |
+| R3 LoRA decoder | −0.034 (sig.) | −0.011 (sig., Holm p 0.001) |
+
+- **Every trained model loses on Kvasir-SEG.** Almost every image is worse (115–120 of 120). The LoRA runs lose less than full fine-tuning: R3 −0.034, R6 −0.040, R7 −0.065, R2 −0.073, R1 −0.086.
+- **On Kvasir-Instrument, only the fully trained models lose clearly.** R1 −0.10 and R2 −0.06; the encoder-LoRA runs R6 and R7 are not significantly different from B0.
+- **What we can say:** dental training costs accuracy on other images, and full fine-tuning costs the most on both sets. The practical point holds regardless: the LoRA adapters can be switched off for non-dental images, which restores B0 exactly, while full fine-tuning can't be undone.
+- **What we can't say yet:** why polyps suffer for every model. H2 (mask size) is meant to show whether the trained models draw masks that are too small or too large there.
+- **Caveats:** Kvasir-SEG may have been in LiteMedSAM's own training data (B0 0.952 is very high), so it measures forgetting of familiar data. The new B0 on Kvasir-Instrument (0.917) is 0.012 above the earlier baseline (0.905), just over the 0.01 we said to flag; H1 checks whether the two B0 runs agree image by image before K is reported.
+
+
 ## 13. Limitations
 
 1. **Small evaluation sets.** 42 validation and 63 test photos. A single run's difference below about 0.03 DSC is within noise; that is why decisions use seeds and paired per-photo tests.

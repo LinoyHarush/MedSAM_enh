@@ -383,4 +383,31 @@ B0 should be close to your earlier 0.905 DSC on this set.
 
 Send Claude both tables.
 
+## Step H — follow-up checks after G and K (added 2026-10-22; exploratory, decided after seeing the G/K results)
+
+All CPU, all read saved predictions only (no model is run), a few minutes each. Session: daily setup, S1, S2 without `cr.copy_data()`, then G0 (`import importlib, colab_extras as cx; importlib.reload(cx)`). Nothing existing is overwritten: each writes new CSV files in `experiments/<set>/figures/`.
+
+**H1 · Is the new B0 on Kvasir the same as the earlier baseline?** (needed before reporting K: on Kvasir-Instrument the new B0 is 0.917, the earlier one 0.905)
+```python
+cx.b0_reproduce("kvasir_instruments")
+cx.b0_reproduce("kvasir_seg")
+```
+Compares the new B0 scores and predictions with the old `og_ckpt` ones, image by image.
+
+**H2 · Do the trained models draw masks that are too small or too large on Kvasir?** (why the forgetting happens)
+```python
+cx.mask_bias("kvasir_seg")
+cx.mask_bias("kvasir_instruments")
+cx.mask_bias(cr.TEST, ["og_ckpt", "Z", "R1_s0", "R1_s1", "R1_s2", "R7_s0", "R7_s1", "R7_s2"])   # same on our test set, for reference
+```
+
+**H3 · R7's errors vs lesion size as R7 actually saw it** (G3's lesion-size column ignored the zoom on the 27 large photos)
+```python
+cx.error_by_seen_size()
+```
+
+**H4 · The close-up example figure** (F7b, not run yet): `cr.copy_test_data(["R7_s0", "R7_s1", "R7_s2"])`, then `cf.fig_examples(closeup=True)` (after `import colab_figures as cf; importlib.reload(cf)`).
+
+Send Claude the H1–H3 outputs and the figure.
+
 Limitations of the whole project are listed in the review file, section 13.

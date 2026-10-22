@@ -246,6 +246,97 @@ def forgetting_table(ds):
     return df
 
 
+def _segs_dir(name, ds):
+    for base in (f"/content/work/data/{ds}/MedSAM_test/{cr.sub(ds)}", f"{cr.REPO_D}/data/{ds}/MedSAM_test/{cr.sub(ds)}"):
+        if os.path.isdir(f"{base}/segs_{name}") and os.path.isdir(f"{base}/gts"):
+            return base
+    raise FileNotFoundError(f"No predictions segs_{name} for {ds} on the runtime or on Drive")
+
+
+def b0_reproduce(ds):
+    """Added 2026-10-22: the new B0 on a Kvasir set vs the B0 scored earlier in LiteMedSAM_Baseline_production.ipynb
+    (og_ckpt). The new B0 goes through infer_zoom.py with zoom off, which should repeat the original inference exactly.
+    Prints per-image DSC of both (if the old scores are on Drive) and pixel agreement of the two predictions (if the
+    old predictions are). Reads saved files only."""
+    new, old = cr.load("B0", ds, _root()), cr.load("og_ckpt", ds, _root())
+    if old is None:
+        print(f"No old og_ckpt scores in experiments/{ds}/og_ckpt/ on Drive")
+    else:
+        m = new.merge(old, on="case", suffixes=("_new", "_old"))
+        d = m.dsc_new - m.dsc_old
+        print(f"{ds}: B0 new {new.dsc.mean():.4f} ({len(new)} images) vs old og_ckpt {old.dsc.mean():.4f} ({len(old)} images); "
+              f"{len(m)} in both: mean change {d.mean():+.4f}, identical DSC (to 1e-4) on {int((d.abs() < 1e-4).sum())}")
+        if len(m) < max(len(new), len(old)):
+            print("   the two runs cover different images: compare the image lists before anything else")
+        print(m.assign(change=d).sort_values("change").iloc[[0, 1, 2, -3, -2, -1]][["case", "dsc_old", "dsc_new", "change"]]
+              .round(4).to_string(index=False))
+    T = f"{cr.REPO_D}/data/{ds}/MedSAM_test/{cr.sub(ds)}"
+    a, b = f"{T}/segs_B0", f"{T}/segs_og_ckpt"
+    if not (os.path.isdir(a) and os.path.isdir(b)):
+        print("Old or new predictions not on Drive: pixel comparison skipped")
+        return
+    same, ious = 0, []
+    common = sorted(set(x for x in os.listdir(a) if x.endswith(".npz")) & set(os.listdir(b)))
+    for f in common:
+        pa, pb = np.load(f"{a}/{f}")["segs"] > 0, np.load(f"{b}/{f}")["segs"] > 0
+        if pa.shape != pb.shape:
+            ious.append(np.nan); continue
+        same += int((pa == pb).all())
+        u = (pa | pb).sum(); ious.append((pa & pb).sum() / u if u else 1.0)
+    print(f"Predictions: {len(common)} images in both, identical on {same}; IoU new vs old: median {np.nanmedian(ious):.4f}, "
+          f"min {np.nanmin(ious):.4f}; shape mismatches {int(np.isnan(ious).sum())}")
+
+
+def mask_bias(ds, models=None):
+    """Added 2026-10-22, after the K results (exploratory, not fixed in advance): does a model draw masks that are too
+    small or too large? Per image: predicted area / true area, precision (share of the predicted pixels that are right)
+    and recall (share of the true pixels found). Reads saved predictions only, runs no model (CPU, a few minutes).
+    Default models: the Kvasir set (B0 and every trained run). For the dental test set pass e.g.
+    ["og_ckpt", "Z", "R1_s0", "R1_s1", "R1_s2", "R7_s0", "R7_s1", "R7_s2"]."""
+    models = models or [m for m, _ in KV_MODELS]
+    rows = []
+    for m in models:
+        base = _segs_dir(m, ds)
+        ratio, prec, rec = [], [], []
+        for f in sorted(x for x in os.listdir(f"{base}/segs_{m}") if x.endswith(".npz")):
+            pr = np.load(f"{base}/segs_{m}/{f}")["segs"] > 0
+            gt = np.load(f"{base}/gts/{f}")["gts"] > 0
+            tp = (pr & gt).sum()
+            ratio.append(pr.sum() / max(gt.sum(), 1)); prec.append(tp / max(pr.sum(), 1)); rec.append(tp / max(gt.sum(), 1))
+        rows.append({"model": m, "images": len(ratio), "predicted / true area (median)": np.median(ratio),
+                     "images with predicted < true area": f"{int((np.array(ratio) < 1).sum())}/{len(ratio)}",
+                     "precision (mean)": np.mean(prec), "recall (mean)": np.mean(rec)})
+    df = pd.DataFrame(rows).round(3)
+    _save_csv(df, ds, "mask_bias.csv")
+    display(df)
+    print("Area ratio < 1 with high precision and lower recall = masks too small (under-segmentation); "
+          "> 1 with lower precision = masks spill outside the object.")
+    return df
+
+
+def error_by_seen_size():
+    """Added 2026-10-22 (exploratory): G3 used 'box side at 256 px without zoom', which is wrong for the 27 large photos
+    (zoom crops them). Here the lesion size is measured as R7 actually saw it: box side x 256 / crop side, from R7's own
+    zoom_boxes.csv (median seed). Spearman with R7 DSC (mean of 3 seeds), for all photos, small and large separately."""
+    from scipy.stats import spearmanr
+    ds = cr.TEST
+    r7_med = sorted(R7, key=lambda r: _dsc(r, ds).dsc.mean())[1]
+    zb = pd.read_csv(f"{_segs_dir(r7_med, ds)}/segs_{r7_med}/zoom_boxes.csv")
+    zb["seen side px"] = (np.maximum(zb.box_x2 - zb.box_x1, zb.box_y2 - zb.box_y1) + 1) * 256 / np.maximum(zb.crop_w, zb.crop_h)
+    per = zb.groupby("case")["seen side px"].median().rename("median box side as seen (px of 256)")
+    r7 = _seed_mean(R7, ds).rename("R7 DSC")
+    df = pd.concat([r7, per], axis=1).join(cr.split.set_index("case").size_group)
+    rows = []
+    for g, d in [("all", df), ("small", df[df.size_group == "small"]), ("large", df[df.size_group == "large"])]:
+        rho, p = spearmanr(d.iloc[:, 1], d["R7 DSC"])
+        rows.append({"photos": g, "n": len(d), "median seen side": d.iloc[:, 1].median(), "Spearman rho": rho, "p": p})
+    out = pd.DataFrame(rows).round(4)
+    _save_csv(df.reset_index().rename(columns={"index": "case"}), ds, "error_by_seen_size_per_photo.csv")
+    _save_csv(out, ds, "error_by_seen_size.csv")
+    display(out)
+    return out
+
+
 # ---------------------------------------------------------------- E3: AlphaDent checks (after prepare_alphadent.py)
 def check_alphadent(src, ds="alphadent_valid", split="valid", n_png=10, n_show=4, seed=0):
     """Checks that our converted masks mean the same as AlphaDent's own labels, before any model is run.
