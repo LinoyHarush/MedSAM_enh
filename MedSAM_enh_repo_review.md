@@ -485,7 +485,63 @@ What it means for the report: **R7's lead over R3 is not an artefact of the lear
 - **On Kvasir-Instrument, only the fully trained models lose clearly.** R1 −0.10 and R2 −0.06; the encoder-LoRA runs R6 and R7 are not significantly different from B0.
 - **What we can say:** dental training costs accuracy on other images, and full fine-tuning costs the most on both sets. The practical point holds regardless: the LoRA adapters can be switched off for non-dental images, which restores B0 exactly, while full fine-tuning can't be undone.
 - **What we can't say yet:** why polyps suffer for every model. H2 (mask size) is meant to show whether the trained models draw masks that are too small or too large there.
-- **Caveats:** Kvasir-SEG may have been in LiteMedSAM's own training data (B0 0.952 is very high), so it measures forgetting of familiar data. The new B0 on Kvasir-Instrument (0.917) is 0.012 above the earlier baseline (0.905), just over the 0.01 we said to flag; H1 checks whether the two B0 runs agree image by image before K is reported.
+- **Caveats:** Kvasir-SEG may have been in LiteMedSAM's own training data (B0 0.952 is very high), so it measures forgetting of familiar data. The new B0 on Kvasir-Instrument (0.917) was 0.012 above the earlier baseline (0.905); H1 below settles it.
+
+
+## 12d. Step H follow-up checks (2026-10-22; exploratory, decided after seeing G and K)
+
+**H1 · B0 on Kvasir reproduces the earlier baseline exactly.** The new B0 predictions are pixel-identical to the old `og_ckpt` ones on all 118 Kvasir-Instrument and all 120 Kvasir-SEG images. So the 0.917 vs 0.905 gap is not in the masks. It must come from how the earlier number was computed (its scores aren't in `experiments/<set>/og_ckpt/`, so we can't compare them). The new number is computed exactly like every other model's, so the K comparison is fair. Report 0.917 and, if the old 0.905 appears anywhere, note that it was scored differently.
+
+**H2 · Forgetting = masks that are too small.** Median predicted / true area, precision, recall:
+
+| | Kvasir-SEG | Kvasir-Instrument | Our test set |
+|---|---|---|---|
+| B0 (og_ckpt) | 0.95, 0.98, 0.92 | 0.95, 0.95, 0.89 | 0.89, 0.75, 0.68 |
+| Z | = B0 | = B0 | 0.89, 0.86, 0.77 |
+| R1, 3 seeds | 0.82, 0.97, 0.79 | 0.84–0.94, 0.89–0.93, 0.75–0.78 | 0.84–0.88, 0.92, 0.79–0.81 |
+| R7, 3 seeds | 0.84–0.86, 0.98, 0.81–0.83 | 0.94–0.95, 0.96, 0.87–0.88 | 0.87, 0.93, 0.79–0.80 |
+| R2 / R3 / R6 | 0.85 / 0.89 / 0.89 area; precision 0.98–0.99; recall 0.80 / 0.86 / 0.85 | 0.91 / 0.93 / 0.96 area; recall 0.81 / 0.87 / 0.91 | – |
+
+- **Kvasir-SEG:** every trained model draws smaller masks than B0. Precision stays at 0.97–0.99, but recall falls from 0.92 to 0.78–0.86. The models don't put masks in wrong places; they leave out part of the polyp. The amount of shrinking follows the forgetting order: R1 shrinks most, R3 and R6 least.
+- **Kvasir-Instrument:** R7 and R6 draw masks the same size as B0 (no forgetting there). R1 shrinks the masks and also loses precision (0.89–0.93 vs 0.95), so it makes both kinds of errors.
+- **Our test set:** training mainly raises precision (B0 0.75 → R7 0.93) and also recall (0.68 → 0.80). R7's remaining dental error is mostly missed lesion area: 93% of what it marks is lesion, but it finds only about 80% of the lesion.
+- **Interpretation:** dental training makes the model more conservative. That fits the dental lesions, and the training box jitter (boxes up to 20% too large) may teach "the object is smaller than its box". On tight-boxed polyps, the same habit costs recall. This is consistent with the data but not proven: a run trained without jitter would be needed to test it, and we don't plan one.
+
+**H4 · Close-up figure** (fig5b): A, B0 and Z mark the light enamel next to the cavity; R7 marks the dark cavity itself. B, Z spills outside the box; R7 stays inside it, close to the box shape. C, B0 marks nothing (the lesion vanishes at whole-photo scale); Z and R7 both find it. D, R7's worst loss to Z: R7 marks only the upper part of the dark lesion and misses the rest, while Z covers more of it. That's the same under-segmentation H2 measures.
+
+**H3 · R7's DSC vs lesion size as R7 saw it** (box side × 256 / crop side, median per photo; Spearman with R7's 3-seed mean DSC):
+
+| Photos | n | Median seen side (px of 256) | ρ | p |
+|---|---|---|---|---|
+| all | 63 | 64 | 0.09 | 0.50 |
+| small (no zoom) | 36 | 41 | **0.46** | **0.005** |
+| large (zoomed) | 27 | 128 | −0.09 | 0.65 |
+
+- **On small photos, R7 scores lower the smaller the lesion appears to it** (ρ = 0.46, p = 0.005; still below 0.05 after correcting for the 3 tests). These photos aren't zoomed, so a lesion is often only 20–40 px in the 256-px input.
+- **On large photos there's no relation.** Zoom crops every lesion with the same margin, so they all reach the model at about the same size (median 128 px, half the crop by design). That takes size out of the picture; their remaining errors have other causes.
+- **Why G3 found nothing:** pooling the two groups hides the effect, because the large photos all sit at about 128 px whatever their DSC.
+- **Conclusion:** R7's main weak spot is lesions that look tiny to the model in photos too small to be zoomed. Our zoom rule never enlarges (a crop is at least 256 px of the original), so it can't help them. Future work: zoom by lesion size instead of photo size, allowing enlargement of tiny lesions, tested on validation first. Exploratory: decided after seeing G3.
+
+
+## 12e. AlphaDent external test (E3, run 2026-10-22; 64 `valid` photos with caries, 258 boxes, all zoomed)
+
+| Method | DSC as given | DSC 20% looser |
+|---|---|---|
+| B0 zero-shot | 0.488 | 0.496 |
+| **Z zero-shot + zoom** | **0.736** | 0.647 |
+| R3 LoRA decoder (seed 0) | 0.691 | 0.716 |
+| R1 full fine-tuning (3 seeds) | 0.659 ± 0.012 | 0.682 ± 0.004 |
+| R6 LoRA enc+dec (seed 0) | 0.665 | 0.719 |
+| R2 frozen encoders (seed 0) | 0.655 | 0.673 |
+| R7 LoRA encoder (3 seeds) | 0.653 ± 0.008 | **0.710 ± 0.002** |
+
+**Main comparison (fixed in advance): R7 vs Z, boxes as given. R7 is worse:** −0.074 to −0.089 per seed, worse on 46–53 of 64 photos, Holm p < 0.0001. Every trained model is significantly below Z (−0.045 for R3 to −0.089). All are far above B0 (+0.16 to +0.20).
+
+- **Zoom generalises; dental fine-tuning doesn't** (with these boxes). Zoom alone lifts AlphaDent from 0.488 to 0.736 (+0.25, the same size of gain as on our large test photos). The training that added +0.06 on our test set costs −0.08 here.
+- **With 20% looser boxes the order flips.** Every trained model beats Z (R7 +0.06, 50–51 of 64 photos, Holm p < 0.0001), and the trained models score *higher* with looser boxes than with the given ones (R7 0.653 → 0.710). Z drops as usual (−0.09).
+- **Likely explanation (to be checked with AD9):** the trained models draw masks smaller than their box, as H2 found on our data and on Kvasir. AlphaDent's outlines are coarse polygons that fill most of a tight box, so a model that shrinks inside the box misses area (fig5 row D: R7 marks thin strips where the truth fills the box). A looser box gives the models room, and their shrinking then lands closer to the truth. Two causes are possible, and we can't separate them without a new training run: (1) the training box jitter (up to 20% too large) taught "the object is smaller than its box"; (2) Roboflow's tighter, more detailed outlines taught a narrower idea of a lesion than AlphaDent's generous polygons. Either way it's a mismatch in box and label conventions between datasets, not a failure to see caries. Z, which never learned either convention, follows the given box.
+- **R7 vs R1:** equal with boxes as given (−0.006, p = 0.36); R7 better with looser boxes (+0.029, Wilcoxon p = 0.004). Same pattern as on our test set: R7 is more robust when the box changes.
+- **For the report:** state the main result plainly (R7 < Z on AlphaDent as given). Present the looser-box reversal and the explanation as exploratory. The practical message: the fine-tuned models are tied to the box and label conventions they were trained on; zero-shot + zoom is the safer choice on unseen data. As before, AlphaDent's numbers aren't comparable with the paper's detection mAP.
 
 
 ## 13. Limitations

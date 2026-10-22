@@ -246,11 +246,25 @@ def forgetting_table(ds):
     return df
 
 
+def _bases(ds):
+    return (f"/content/work/data/{ds}/MedSAM_test/{cr.sub(ds)}", f"{cr.REPO_D}/data/{ds}/MedSAM_test/{cr.sub(ds)}")
+
+
 def _segs_dir(name, ds):
-    for base in (f"/content/work/data/{ds}/MedSAM_test/{cr.sub(ds)}", f"{cr.REPO_D}/data/{ds}/MedSAM_test/{cr.sub(ds)}"):
-        if os.path.isdir(f"{base}/segs_{name}") and os.path.isdir(f"{base}/gts"):
+    """Folder holding segs_<name> (runtime first, then Drive)."""
+    for base in _bases(ds):
+        if os.path.isdir(f"{base}/segs_{name}"):
             return base
     raise FileNotFoundError(f"No predictions segs_{name} for {ds} on the runtime or on Drive")
+
+
+def _gts_dir(ds):
+    """Folder holding the ground-truth masks (runtime first, then Drive). AlphaDent's exist only on the runtime,
+    after AD4 (prepare_alphadent.py) has run in this session."""
+    for base in _bases(ds):
+        if os.path.isdir(f"{base}/gts"):
+            return f"{base}/gts"
+    raise FileNotFoundError(f"No ground-truth masks for {ds} on the runtime or on Drive (AlphaDent: run AD0-AD4 first)")
 
 
 def b0_reproduce(ds):
@@ -296,11 +310,11 @@ def mask_bias(ds, models=None):
     models = models or [m for m, _ in KV_MODELS]
     rows = []
     for m in models:
-        base = _segs_dir(m, ds)
+        base, G = _segs_dir(m, ds), _gts_dir(ds)
         ratio, prec, rec = [], [], []
         for f in sorted(x for x in os.listdir(f"{base}/segs_{m}") if x.endswith(".npz")):
             pr = np.load(f"{base}/segs_{m}/{f}")["segs"] > 0
-            gt = np.load(f"{base}/gts/{f}")["gts"] > 0
+            gt = np.load(f"{G}/{f}")["gts"] > 0
             tp = (pr & gt).sum()
             ratio.append(pr.sum() / max(gt.sum(), 1)); prec.append(tp / max(pr.sum(), 1)); rec.append(tp / max(gt.sum(), 1))
         rows.append({"model": m, "images": len(ratio), "predicted / true area (median)": np.median(ratio),

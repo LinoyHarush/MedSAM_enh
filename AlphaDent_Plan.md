@@ -173,6 +173,15 @@ cf.fig_examples(AD)       # 4 photos chosen by rule (R7's biggest gains over Z, 
 ```
 Saved in `experiments/alphadent_valid/figures/`. Send Claude the AD4 printout, the AD5 checks, the AD7 tables and the figures.
 
+### AD9 · Follow-up checks (CPU; added 2026-10-22, exploratory: decided after seeing AD7)
+AD7 showed every trained model below Z with the boxes as given but above it with 20% looser boxes. These two cells show why. They need the ground-truth masks and photos on the runtime's disk, so in a new CPU session first run setup, cell 6 (copy code), AD0, AD1, AD2 and AD4. The predictions are read from Drive; no model is run.
+```python
+importlib.reload(cx); importlib.reload(cf)
+cx.mask_bias(AD, ["og_ckpt", "Z", "Z_p20", "R1_s0", "R1_s1", "R1_s2", "R7_s0", "R7_s1", "R7_s2",
+                  "R7_s0_p20", "R7_s1_p20", "R7_s2_p20"])          # masks too small or too large? (~5-10 min)
+cf.fig_examples(AD, closeup=True)                                  # the same 4 rows, cropped to one box each
+```
+
 ## Total time
 
 About **half a day of work spread over one or two sessions**:
