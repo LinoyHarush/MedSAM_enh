@@ -108,6 +108,8 @@ def inference_cost(models=None, n_photos=63):
                         (f"R7 ({r7_med}, zoom)", cr.infer_ckpt(r7_med), 2000), ("R1 (R1_s0, zoom)", cr.infer_ckpt("R1_s0"), 2000)]
     cr.copy_test_data([r7_med, "R1_s0"])
     dev = cr.device()
+    print(f"Device: {dev}. Warm-up, then {len(models)} models x {n_photos} photos; "
+          f"about 2-5 min in total on GPU, 15-40 min on CPU.", flush=True)
     # warm-up so the first model doesn't pay for loading CUDA
     cr.sh(f"mkdir -p /content/timing/warm_in && cp $(ls {T}/imgs/*.npz | head -3) /content/timing/warm_in/")
     cr.sh(f"cd {cr.CODE} && python infer_zoom.py -i /content/timing/warm_in -o /content/timing/warm_out "
@@ -116,10 +118,13 @@ def inference_cost(models=None, n_photos=63):
     rows = []
     for label, ck, za in models:
         out = f"/content/timing/{label.split()[0]}_{za}"
+        print(f"timing {label} on {dev} ({len(rows) + 1} of {len(models)}; output hidden so it doesn't affect the time) ...",
+              flush=True)
         t0 = time.time()
         cr.sh(f'cd {cr.CODE} && python infer_zoom.py -i "{T}/imgs" -o {out} -lite_medsam_checkpoint_path {ck} '
               f"-zoom_above {za} -device {dev} > /dev/null 2>&1")
         wall = time.time() - t0
+        print(f"   done in {wall / 60:.1f} min", flush=True)
         e = pd.read_csv(f"{out}/efficiency.csv").set_index("case").time
         rows.append({"model": label, "device": dev, "photos": len(e), "s/photo mean": e.mean(),
                      "s/photo median": e.median(), "large photos mean": e[split.reindex(e.index) == "large"].mean(),
