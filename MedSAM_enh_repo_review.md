@@ -559,6 +559,49 @@ What it means for the report: **R7's lead over R3 is not an artefact of the lear
 - **Close-ups (fig5b on AlphaDent):** the ground truth is drawn as coarse straight-edged polygons: a band across the contact between two teeth (A, D), a quadrilateral over the stained fossa (B), a bent strip (C). R7 traces the dark lines and stains inside them: a thin curve along the dark line in A, a wedge along the contact in D, an irregular patch over the stain in B. By eye, R7's outlines follow visible image features more closely than the polygons do. But dentists may mark the lesion's full clinical extent, including demineralised tissue that is barely visible on the surface (particularly between teeth), so "tighter" doesn't mean "more correct". We can't judge which is right without a dental expert.
 - **Wording for the report:** "On AlphaDent the fine-tuned models outline caries more tightly than the annotators' coarse polygons: 90% of their mask lies inside the annotation, but they cover only about half of it. Their lower DSC reflects this difference in outline convention at least as much as missed lesions. Whether the tighter outline is clinically better would need expert review." Optional strengthening: a dentist rates 10–20 close-ups (annotation vs R7, unlabelled).
 
+**AD10 · Box fill, box-only baselines and IoU on AlphaDent (run 2026-10-22; a reference added after all results were seen).**
+- **How much of its box does a caries polygon fill?** Median 57% (quartiles 48–67%); 71% of boxes are more than half filled. My earlier wording "most of their box" was only partly right. The comparison with our own data (Step I2) is still to come.
+- **Masks made from the box alone, scored like the models:**
+
+| Mask | DSC | IoU per photo | vs Z | vs R7 (mean of 3 seeds) |
+|---|---|---|---|---|
+| ELLIPSE inscribed in each box | **0.766** | 0.628 | +0.030, better on 41/64, p = 0.003 | +0.113, better on 49/64, p < 0.001 |
+| BOX filled | 0.719 | 0.568 | −0.017, 25/39, p = 0.09 (n.s.) | +0.067, better on 43/64, p = 0.001 |
+| Z zero-shot + zoom | 0.736 | 0.592 | – | – |
+| R7 | 0.653 | 0.496 | – | – |
+
+- **Compared with our own data (Step I2, below), the picture is different from what I first wrote.** The box-shape baselines score about the same on all three sets (ellipse DSC 0.742 validation, 0.735 test, 0.766 AlphaDent), and lesions fill about the same share of their box (median 50%, 53%, 57%). So AlphaDent's labels are not unusually box-like. What changes is the models. On our data, R7 beats the ellipse by +0.12 (56 of 63 test photos); on AlphaDent it falls 0.11 below it. Z behaves the same way (+0.06 above the ellipse on test, −0.03 below it on AlphaDent).
+- **Consequence for the AlphaDent conclusion:** the drop is real. On AlphaDent the models lose the whole advantage they have over a shape drawn from the box. AD9 shows how: their masks cover only about 60% of the annotated area, with 90% precision. They mark part of what the AlphaDent annotators call caries and leave the rest out. Whether that's because the annotators include tissue our models (trained on Roboflow's outlines) don't treat as lesion, or because the DSLR photos look different, can't be separated with our data. Report it as: "On an external dataset, the models' masks were much smaller than the annotations (60% of the area, 90% inside them), and no image-based method beat an ellipse drawn from the box."
+- **IoU on AlphaDent** (per photo / pooled): B0 0.343 / 0.371, Z 0.592 / 0.586, R1 mean 0.501 / 0.492, R7 mean 0.496 / 0.487, R3 0.533 / 0.533. Per-photo and pooled agree within about 0.03.
+
+## 12f. Step I wrap-up results (2026-10-22)
+
+**I1 · Refreshed outputs:** the method table now shows R3's kept epoch as 2, the fig1 labels no longer overlap, and fig4's axis shows whole epochs. No scores changed.
+
+**I2 · Box-only baselines on our data** (a reference, added after all results were seen; DSC per photo):
+
+| Set | Lesion share of its box (median) | BOX | ELLIPSE | Z | R7 | R7 − ELLIPSE |
+|---|---|---|---|---|---|---|
+| Validation (42) | 0.50 | 0.691 | 0.742 | 0.820 | 0.862 | +0.121, R7 better on 35/42 |
+| Test (63) | 0.53 | 0.689 | 0.735 | 0.796 | 0.853 | +0.119, R7 better on 56/63 |
+| AlphaDent (64) | 0.57 | 0.719 | 0.766 | 0.736 | 0.653 | −0.113, R7 worse on 49/64 |
+
+- On our data, the models add a lot beyond the box: R7 is 0.12 above the best box-only shape, and Z is 0.06–0.08 above it. All p < 0.001.
+- The box alone already gives a lot: an ellipse reaches DSC 0.74 (IoU 0.59) on our test set without looking at the image. Every box-prompted result should be read against that, which is why it belongs in the report's main table as a reference line.
+
+**I3 · IoU** (per photo / pooled over all pixels):
+
+| | Validation | Test | AlphaDent |
+|---|---|---|---|
+| B0 | 0.593 / 0.635 | 0.561 / 0.569 | 0.343 / 0.371 |
+| Z | 0.714 / 0.789 | 0.679 / 0.726 | 0.592 / 0.586 |
+| R1, mean of 3 seeds | 0.749 / 0.750 | 0.749 / 0.749 | 0.501 / 0.492 |
+| R7, mean of 3 seeds | 0.764 / 0.774 | 0.752 / 0.748 | 0.496 / 0.487 |
+| ELLIPSE (box only) | 0.603 / – | 0.593 / – | 0.628 / – |
+
+- **Pooled IoU shrinks the benefit of training:** test R7 vs Z is +0.07 per photo but +0.02 pooled; on validation Z is even ahead pooled (0.789 vs 0.774). Pooling weighs pixels, so the large lesions dominate, and zoom alone already handles those well. Training helps mostly on small photos and small lesions (fig2, H3), which pooling barely counts. Report both, and say which one any paper we compare with uses.
+- **Literature line (cautious):** R7's test IoU of 0.75 is above Liu 2024 (caries IoU 0.71) and Felsch 2023 (0.63–0.69), but those are fully automatic and ours is given the lesion's box. Our own box-only ellipse already reaches IoU 0.59, the same as Liu's U-Net. The numbers aren't comparable as a ranking; say so in the same sentence.
+
 ## 13. Limitations
 
 1. **Small evaluation sets.** 42 validation and 63 test photos. A single run's difference below about 0.03 DSC is within noise; that is why decisions use seeds and paired per-photo tests.
