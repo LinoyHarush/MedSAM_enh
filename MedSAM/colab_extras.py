@@ -351,6 +351,102 @@ def error_by_seen_size():
     return out
 
 
+# ---------------------------------------------------------------- reference baselines and IoU (added 2026-10-22)
+def _imgs_dir(ds):
+    for base in _bases(ds):
+        if os.path.isdir(f"{base}/imgs"):
+            return f"{base}/imgs"
+    raise FileNotFoundError(f"No photos for {ds} on the runtime or on Drive (AlphaDent: run AD0-AD4 first)")
+
+
+def _dice(a, b):
+    s = a.sum() + b.sum()
+    return 2 * (a & b).sum() / s if s else 1.0
+
+
+def box_baselines(ds):
+    """Added 2026-10-22, after all results were seen (a reference, not a method). Two questions, from the boxes and
+    ground-truth masks only (no model is run; CPU):
+    (1) How much of its box does each lesion fill? Per box: lesion pixels inside the box / box area.
+    (2) How well would the box alone do? Two masks made only from the boxes, scored like the models (binary DSC per
+        photo, IoU = DSC / (2 - DSC) per photo): BOX = every box filled; ELLIPSE = the ellipse inscribed in each box.
+    Compared per photo with Z and with R7 (mean of 3 seeds), two-sided Wilcoxon. Also checks that this file's DSC
+    reproduces the stored DSC of Z (so the baselines are scored exactly like the models)."""
+    import cv2
+    from scipy.stats import wilcoxon
+    I, G = _imgs_dir(ds), _gts_dir(ds)
+    zdir = f"{_segs_dir('Z', ds)}/segs_Z"
+    z_stored = _dsc("Z", ds).dsc
+    fills, rows, zdiff = [], [], []
+    for c in sorted(z_stored.index):
+        with np.load(f"{I}/{c}") as f:
+            boxes = np.asarray(f["boxes"]).reshape(-1, 4).astype(int)
+        gt = np.load(f"{G}/{c}")["gts"] > 0
+        H, W = gt.shape
+        box_m, ell_m = np.zeros((H, W), bool), np.zeros((H, W), np.uint8)
+        for x1, y1, x2, y2 in boxes:
+            x1, y1, x2, y2 = max(x1, 0), max(y1, 0), min(x2, W - 1), min(y2, H - 1)
+            box_m[y1:y2 + 1, x1:x2 + 1] = True
+            fills.append(gt[y1:y2 + 1, x1:x2 + 1].mean())
+            cv2.ellipse(ell_m, ((float(x1 + x2) / 2, float(y1 + y2) / 2), (float(x2 - x1 + 1), float(y2 - y1 + 1)), 0.0), 1, -1)   # inscribed in the box
+        zp = np.load(f"{zdir}/{c}")["segs"] > 0
+        zdiff.append(abs(_dice(zp, gt) - z_stored[c]))
+        rows.append({"case": c, "BOX": _dice(box_m, gt), "ELLIPSE": _dice(ell_m > 0, gt)})
+    df = pd.DataFrame(rows).set_index("case")
+    df["Z"], df["R7"] = z_stored, _seed_mean(R7, ds).reindex(df.index)
+    fills = np.array(fills)
+    print(f"{ds}: {len(df)} photos, {len(fills)} boxes")
+    print(f"(1) share of each box covered by its lesion: median {np.median(fills):.2f}, "
+          f"quartiles {np.quantile(fills, 0.25):.2f}-{np.quantile(fills, 0.75):.2f}; "
+          f"boxes more than half filled: {(fills > 0.5).mean():.0%}")
+    print(f"    check: DSC recomputed here vs stored DSC for Z, largest difference {max(zdiff):.4f} (expect ~0)")
+    out = []
+    for m in ["BOX", "ELLIPSE", "Z", "R7"]:
+        r = {"mask": m, "DSC": df[m].mean(), "IoU (per photo)": (df[m] / (2 - df[m])).mean()}
+        for ref in ["Z", "R7"]:
+            if m != ref and m in ("BOX", "ELLIPSE"):
+                d = df[m] - df[ref]
+                r[f"vs {ref}: mean"] = d.mean()
+                r[f"vs {ref}: better/worse"] = f"{int((d > 0).sum())}/{int((d < 0).sum())}"
+                r[f"vs {ref}: Wilcoxon p"] = wilcoxon(d).pvalue
+        out.append(r)
+    out = pd.DataFrame(out).round(4)
+    _save_csv(df.reset_index(), ds, "box_baselines_per_photo.csv")
+    _save_csv(pd.DataFrame({"box_fill": fills}), ds, "box_fill_per_box.csv")
+    _save_csv(out, ds, "box_baselines.csv")
+    display(out)
+    return out
+
+
+def iou_table(ds, models=None):
+    """Added 2026-10-22: IoU next to DSC, for comparison with papers that report IoU. Two versions:
+    per photo (the mean over photos of IoU = DSC / (2 - DSC), exact for each photo's binary masks, the same averaging
+    as our DSC) and pooled (all pixels of the set counted together, as some papers do). Per photo needs only the stored
+    scores; pooled reads the saved predictions and ground-truth masks (a few minutes; AlphaDent: run AD0-AD4 first)."""
+    models = models or ["og_ckpt", "Z", "R2_s0", "R3_s0", "R6_s0"] + R1 + R7
+    G = _gts_dir(ds)
+    rows = []
+    for m in models:
+        d = _dsc(m, ds).dsc
+        inter = union = 0
+        sd = f"{_segs_dir(m, ds)}/segs_{m}"
+        for c in d.index:
+            pr, gt = np.load(f"{sd}/{c}")["segs"] > 0, np.load(f"{G}/{c}")["gts"] > 0
+            inter += int((pr & gt).sum()); union += int((pr | gt).sum())
+        rows.append({"model": m, "photos": len(d), "DSC (per photo)": d.mean(),
+                     "IoU (per photo)": (d / (2 - d)).mean(), "IoU (pooled)": inter / union})
+    df = pd.DataFrame(rows)
+    for mth, runs in [("R1 mean of 3 seeds", R1), ("R7 mean of 3 seeds", R7)]:
+        s = df[df.model.isin(runs)]
+        if len(s) == 3:
+            df = pd.concat([df, pd.DataFrame([{"model": mth, "photos": s.photos.iloc[0], **s.iloc[:, 2:].mean().to_dict()}])],
+                           ignore_index=True)
+    df = df.round(4)
+    _save_csv(df, ds, "iou_table.csv")
+    display(df)
+    return df
+
+
 # ---------------------------------------------------------------- E3: AlphaDent checks (after prepare_alphadent.py)
 def check_alphadent(src, ds="alphadent_valid", split="valid", n_png=10, n_show=4, seed=0):
     """Checks that our converted masks mean the same as AlphaDent's own labels, before any model is run.

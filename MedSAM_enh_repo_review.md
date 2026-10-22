@@ -393,7 +393,7 @@ Per-photo DSC of B0 and of zoom on every photo (`zoom_z1`), from `paired_dsc.csv
 
 ## 12. Extra analyses after the main result (plan fixed 2026-10-20, before any of them was run)
 
-Cells: `Shelly_Training.md` (Steps G and K), `Linoy_Training.md` (Step R4) and `AlphaDent_Plan.md` (E3); code: `MedSAM/colab_extras.py`, `MedSAM/prepare_alphadent.py`, run types `R4d` / `R4e` in `MedSAM/colab_runs.py`. (`MedSAM/prepare_kvasir.py` is not needed: the Kvasir sets were already prepared.) Each analysis writes new names only; nothing already on Drive is touched.
+Cells: `Shelly_Training.md` (Steps G and K), `Linoy_Training.md` (Step R4) and `AlphaDent_Plan.md` (E3); code: `MedSAM/colab_extras.py`, `MedSAM/prepare_alphadent.py`, run types `R4d` / `R4e` in `MedSAM/colab_runs.py`. (`MedSAM/prepare_kvasir.py` was not needed, since the Kvasir sets were already prepared, and was deleted on 2026-10-22.) Each analysis writes new names only; nothing already on Drive is touched.
 
 | ID | Question | What is run | Main comparison (fixed now) | Cost |
 |---|---|---|---|---|
@@ -543,6 +543,21 @@ What it means for the report: **R7's lead over R3 is not an artefact of the lear
 - **R7 vs R1:** equal with boxes as given (−0.006, p = 0.36); R7 better with looser boxes (+0.029, Wilcoxon p = 0.004). Same pattern as on our test set: R7 is more robust when the box changes.
 - **For the report:** state the main result plainly (R7 < Z on AlphaDent as given). Present the looser-box reversal and the explanation as exploratory. The practical message: the fine-tuned models are tied to the box and label conventions they were trained on; zero-shot + zoom is the safer choice on unseen data. As before, AlphaDent's numbers aren't comparable with the paper's detection mAP.
 
+
+**AD9 · Why the trained models lose on AlphaDent (run 2026-10-22, exploratory).** Median predicted / true area, mean precision, mean recall:
+
+| | Area | Precision | Recall |
+|---|---|---|---|
+| B0 | 0.65 | 0.67 | 0.43 |
+| Z, as given / looser | 0.87 / 1.66 | 0.79 / 0.52 | 0.71 / 0.87 |
+| R1, 3 seeds, as given | 0.60–0.66 | 0.88–0.90 | 0.53–0.56 |
+| R7, 3 seeds, as given | 0.59–0.64 | 0.90 | 0.52–0.54 |
+| R7, 3 seeds, 20% looser | 1.08–1.14 | 0.68–0.70 | 0.76–0.78 |
+
+- **Confirmed: with the boxes as given, the trained models under-segment.** R7's mask is smaller than the truth on 63–64 of 64 photos, at about 60% of its area. 90% of what R7 marks lies inside the dentists' outline, but it covers only about half of that outline. Z marks larger areas (87%) with lower precision (0.79).
+- **With looser boxes R7 grows to about the true size** (area 1.1). Recall rises to 0.77 and precision falls to 0.69, so its mask now also spills outside the outline. The higher DSC comes from matching the *size* of AlphaDent's polygons, not from a more accurate outline.
+- **Close-ups (fig5b on AlphaDent):** the ground truth is drawn as coarse straight-edged polygons: a band across the contact between two teeth (A, D), a quadrilateral over the stained fossa (B), a bent strip (C). R7 traces the dark lines and stains inside them: a thin curve along the dark line in A, a wedge along the contact in D, an irregular patch over the stain in B. By eye, R7's outlines follow visible image features more closely than the polygons do. But dentists may mark the lesion's full clinical extent, including demineralised tissue that is barely visible on the surface (particularly between teeth), so "tighter" doesn't mean "more correct". We can't judge which is right without a dental expert.
+- **Wording for the report:** "On AlphaDent the fine-tuned models outline caries more tightly than the annotators' coarse polygons: 90% of their mask lies inside the annotation, but they cover only about half of it. Their lower DSC reflects this difference in outline convention at least as much as missed lesions. Whether the tighter outline is clinically better would need expert review." Optional strengthening: a dentist rates 10–20 close-ups (annotation vs R7, unlabelled).
 
 ## 13. Limitations
 

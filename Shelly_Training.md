@@ -410,4 +410,45 @@ cx.error_by_seen_size()
 
 Send Claude the H1–H3 outputs and the figure.
 
+## Step I — wrap-up: reference baselines, IoU, refreshed figures (added 2026-10-22)
+
+**Before Colab, on your computer: delete the unused script, commit and push.** In the repo folder (`C:\Users\97254\Documents\GitHub\MedSAM_enh`), open a terminal (Git Bash, or PowerShell with git):
+```bash
+git pull                                   # first take anything Linoy pushed
+git status                                 # expect: modified MedSAM/colab_extras.py and the .md files
+git rm MedSAM/prepare_kvasir.py            # deletes the file and stages the deletion
+git add MedSAM/colab_extras.py MedSAM/colab_figures.py Shelly_Training.md AlphaDent_Plan.md MedSAM_enh_repo_review.md
+git status                                 # check: only these files, plus "deleted: MedSAM/prepare_kvasir.py"
+git commit -m "Wrap-up: box baselines, IoU table, delete unused prepare_kvasir.py"
+git push
+```
+With GitHub Desktop instead: delete `MedSAM\prepare_kvasir.py` in File Explorer, then in GitHub Desktop tick the changed files, write the same summary, then **Commit to main** and **Push origin**. If `git push` is rejected ("fetch first"), run `git pull` and push again.
+
+**Session:** CPU. Daily setup cell (it must print the files it pulled, not "Already up to date"), S1, the first three lines of S2, then:
+```python
+import importlib, colab_extras as cx, colab_figures as cf
+importlib.reload(cx); importlib.reload(cf)
+```
+
+**I1 · Refresh the three outputs changed by the Step F fixes** (R3's kept epoch 7 → 2; fig1 labels; fig4 whole epochs). This rewrites only these three files in `figures/`; no scores change.
+```python
+t = cf.method_table()          # check: R3's "best epoch" now reads 2
+cf.fig_overview()              # check: the x labels no longer overlap
+cf.fig_training_curves()
+```
+
+**I2 · How much of its box does each lesion fill, and how well does the box alone do?** No model is run: the boxes themselves (filled, and as an inscribed ellipse) are scored as masks. The first line of output checks that the DSC is computed exactly like the models' (largest difference vs Z's stored DSC ≈ 0).
+```python
+cr.copy_test_data([])          # test photos to the runtime's disk (faster than reading from Drive)
+cx.box_baselines(cr.VAL)       # validation: reads the 42 photos from Drive
+cx.box_baselines(cr.TEST)
+```
+
+**I3 · IoU next to DSC** (per photo, the same averaging as our DSC, and pooled over all pixels):
+```python
+cx.iou_table(cr.VAL)
+cx.iou_table(cr.TEST)
+```
+The AlphaDent versions of I2 and I3 are step AD10 in `AlphaDent_Plan.md`. Send Claude the outputs of I1 (the table), I2 and I3.
+
 Limitations of the whole project are listed in the review file, section 13.

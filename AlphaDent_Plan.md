@@ -173,6 +173,12 @@ cf.fig_examples(AD)       # 4 photos chosen by rule (R7's biggest gains over Z, 
 ```
 Saved in `experiments/alphadent_valid/figures/`. Send Claude the AD4 printout, the AD5 checks, the AD7 tables and the figures.
 
+**Results (AD6–AD8 run 2026-10-22; full numbers and discussion in `MedSAM_enh_repo_review.md`, section 12e):**
+- Main comparison (fixed in advance), R7 vs Z with boxes as given: **R7 is worse**, 0.653 vs 0.736 (Holm p < 0.0001). Every trained model is below Z; all are far above B0 (0.488).
+- With 20% looser boxes the order flips: R7 0.710 vs Z 0.647 (exploratory reading).
+- R7 vs R1: equal as given; R7 better with looser boxes (+0.029, p = 0.004).
+- For the report: state the main result plainly. Fine-tuning doesn't transfer to AlphaDent as given, while zero-shot + zoom does. Present the looser-box reversal and its explanation as exploratory. The honest message is that fine-tuned models are tied to the conventions of their training data, and zoom is the robust part of the method.
+
 ### AD9 · Follow-up checks (CPU; added 2026-10-22, exploratory: decided after seeing AD7)
 AD7 showed every trained model below Z with the boxes as given but above it with 20% looser boxes. These two cells show why. They need the ground-truth masks and photos on the runtime's disk, so in a new CPU session first run setup, cell 6 (copy code), AD0, AD1, AD2 and AD4. The predictions are read from Drive; no model is run.
 ```python
@@ -180,6 +186,13 @@ importlib.reload(cx); importlib.reload(cf)
 cx.mask_bias(AD, ["og_ckpt", "Z", "Z_p20", "R1_s0", "R1_s1", "R1_s2", "R7_s0", "R7_s1", "R7_s2",
                   "R7_s0_p20", "R7_s1_p20", "R7_s2_p20"])          # masks too small or too large? (~5-10 min)
 cf.fig_examples(AD, closeup=True)                                  # the same 4 rows, cropped to one box each
+```
+
+### AD10 · Box fill, box-only baselines and IoU (CPU; added 2026-10-22)
+Same session needs as AD9 (setup, cell 6, AD0, AD1, AD2, AD4; then `importlib.reload(cx)`).
+```python
+cx.box_baselines(AD)     # how much of each box the caries polygon fills; the filled box and ellipse scored as masks
+cx.iou_table(AD)         # IoU per photo and pooled (reads 15-MP masks: ~10 min)
 ```
 
 ## Total time
