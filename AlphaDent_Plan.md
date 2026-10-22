@@ -140,6 +140,8 @@ Only go on to AD6 if all of them pass.
 - AD3: classes as expected (0 Abrasion, 1 Filling, 2 Crown, 3–8 Caries 1–6).
 - AD4: 83 photos read, 64 with caries written, 19 without caries skipped. **258 caries boxes, exactly the paper's 258 caries instances on `valid`**; 0 tiny instances dropped; long side median 5,472 px, all 64 above 2,000 px.
 - AD5: (a) passed. (b) found no PNG masks. (c) and (d) didn't print in that run. Re-run AD5 after pulling the new `colab_extras.py` (b1/b2 added) and check (b1), (b2), (c) and (d).
+- **AD5 re-run 2026-10-22: all passed.** (b1) 64 of 64 photos unrotated; (b2) 0 of 763,526 label coordinates outside [0, 1]; (c) 0 boxes without caries; (d) the overlay shows the masks on tooth surfaces inside their boxes. **Green light for AD6.**
+- Noted from the overlay, for the report: AlphaDent's caries outlines are coarse polygons (often 3–5 corners), much less detailed than Roboflow's. A model that follows the real lesion edge can't match them closely, which caps DSC and NSD on AlphaDent for every method. That's one reason the numbers may be lower than on our test set, apart from the new clinic and camera.
 
 ### AD6 · Inference and scoring (GPU recommended)
 Runs:
