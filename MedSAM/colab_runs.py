@@ -1,6 +1,6 @@
 """
-Colab helpers for the training runs of run list B (MedSAM_enh_repo_review.md, section 10b).
-Used by both of us from the notebook; the cells are in Shelly_Training.md and Linoy_Training.md.
+Colab helpers for the training runs, the test-set scoring and the comparison tables.
+Used from the notebooks in notebooks/; the cells, in order, are in the repository's README.md (section 5).
 
     import sys; sys.path.insert(0, "/content/code/MedSAM")
     import colab_runs as cr

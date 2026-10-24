@@ -1,7 +1,7 @@
 """
 LiteMedSAM training, one sample per lesion, with validation, for the dental caries project.
 
-Rewritten 2026-10-15 from the version of 2026-10-10 (see trainer_fixes_brief.md and MedSAM_enh_repo_review.md).
+Rewritten 2026-10-15 from the version of 2026-10-10.
 What a training sample is:
   * one stored box (bboxes.json, from preprocess_tooth_ds.py) = one lesion;
   * the target is that lesion's own pixels (its connected component), not every lesion pixel inside the box;
