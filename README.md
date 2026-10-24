@@ -50,7 +50,6 @@ Every box is loosened by 20% per side, with the same seeded boxes for every meth
 
 ![Test close-ups: ground truth, B0, Z and R7, four photos chosen by a fixed rule](figures/fig5b_examples_closeup.png)
 
-Rows are chosen by a fixed rule, not by eye. A and B: R7 outlines the lesion where the zero-shot models mark the enamel next to it or spill outside the box. C: in a 4000 × 6000 photo the lesion vanishes at 256 px, and only zoom finds it. D: R7's largest loss to Z, an under-segmentation.
 
 ### Forgetting on non-dental images (Kvasir)
 
@@ -72,7 +71,7 @@ Every model is compared with B0 per image (two-sided Wilcoxon, Holm-corrected). 
 
 ![AlphaDent close-ups: ground truth, B0, Z and R7](figures/alphadent_fig5b_examples_closeup.png)
 
-The main comparison, fixed in advance, is R7 vs Z with the boxes as given: R7 is worse (0.653 vs 0.736, p < 0.0001), and every trained model falls below Z. Zoom still adds +0.25 over B0. With looser boxes the order flips (R7 0.710 vs Z 0.647), which we report as exploratory. AlphaDent's dentists outline the whole suspected area with coarse polygons. The trained models trace the visible stain inside them, so their masks cover only about 60% of the annotated area, with 90% of each mask inside it.
+The main comparison, fixed in advance, is R7 vs Z with the boxes as given: R7 is worse (0.653 vs 0.736, p < 0.0001), and every trained model falls below Z. Zoom still adds +0.25 over B0. With looser boxes the order flips (R7 0.710 vs Z 0.647), which we report as exploratory. AlphaDent's dentists outline the whole suspected area with coarse polygons. The trained models trace the visible stain inside them.
 
 ## Repository layout
 
@@ -380,6 +379,7 @@ cx.iou_table(cr.TEST)
     -test_img_path data/kvasir_seg/test/images -test_gt_path data/kvasir_seg/test/masks \
     -test_bbox_csv_dir data/kvasir_seg/test/bbox --binary_mask
   ```
+  `split_kvasir.py` is adapted from the split helper in `notebooks/LiteMedSAM_Baseline_production.ipynb`. The Kvasir-Instrument split was made with an earlier version of the same helper.
   Every model is then scored with `colab_extras.forgetting_score()` and compared with B0 with `forgetting_table()` (section 5). Our first-attempt B0 on Kvasir-Instrument (DSC 0.905) used the original multi-label `evaluation/compute_metrics.py`. The 0.917 we report uses `compute_metrics_binary.py` on the same, pixel-identical predictions.
 - **External test on AlphaDent** (Sosnin et al. 2025, Zenodo record 16582489, CC BY 4.0): DSLR intra-oral photos from another clinic. Inference only: nothing is trained, tuned or chosen on it. Its test labels are closed, so we use the labelled `valid` split. The binary target is built like ours: the six caries classes (ids 3-8) are foreground, while abrasion, filling and crown (0-2) are background. We use one box per caries polygon. The cells, from `notebooks/LiteMedSAM_AlphaDent.ipynb` (session setup as in section 5, without `cr.copy_data()`):
   ```python
@@ -453,7 +453,7 @@ python eval_run.py --run_name frz_20e --ckpt work_dir/cont_og_frz_20e/medsam_lit
 
 The r = 4 run was interrupted and resumed into `work_dir/exp_frz_base_msk_decoder_lora_qv_r4_resume` (`-resume work_dir/exp_frz_base_msk_decoder_lora_qv_r4/medsam_lite_latest.pth --lora_checkpoint work_dir/exp_frz_base_msk_decoder_lora_qv_r4/medsam_lite_lora_latest.pth`). `eval_run.py` defaults to `--dataset dental_caries_segmentation_processed`, the 105 test photos before the split.
 
-Results on the 105 test photos (DSC): zero-shot 0.695, F1 0.699, F2 0.677, LoRA r = 8 0.680, LoRA r = 4 0.672. Three lessons led to the pipeline above: choose on a validation set, train on the prompt used at test time (one box per lesion), and stop large photos from erasing lesions when shrunk to 256 px (zoom).
+Results on the 105 test photos (DSC): zero-shot 0.695, F1 0.699, F2 0.677, LoRA r = 8 0.680, LoRA r = 4 0.672. **Three lessons from these runs led to the pipeline above:** choose on a validation set, train on the prompt used at test time (one box per lesion), and stop large photos from erasing lesions when shrunk to 256 px (zoom).
 
 ## Reproducibility notes
 
@@ -464,7 +464,7 @@ Results on the 105 test photos (DSC): zero-shot 0.695, F1 0.699, F2 0.677, LoRA 
   - *Training runs:* a run passes against Z with the same sign-test-and-0.03 rule. The two best methods on validation (R1, R7) got seeds 1 and 2. R7 would be extended only if both new seeds hit the epoch cap while still improving, and neither did.
   - *Test set and external sets, comparisons fixed before scoring:* R7 vs R1 (per-photo means of 3 seeds, two-sided Wilcoxon), zoom after training (R7, large photos), every model vs B0 on Kvasir, and R7 vs Z on AlphaDent. Analyses decided after seeing results are reported as exploratory.
 - **No overwriting:** `colab_runs.py` refuses to create or save a run whose name already exists, so every result keeps its own folder.
-- **Timing:** free-tier Colab speed varies by about ±20% between sessions. R7 trains in about 58 min per run, R1 in about 23 min. R7 takes longer because it runs the full 20 epochs: with only 59 K trainable weights it keeps improving until epochs 14-17 and does not overfit. R1 trains all 9.8 M weights on 414 training photos, a large number of parameters for a dataset this size. Its validation Dice peaks at epochs 0-3 and then drops (it overfits), so early stopping ends it after 4-7 epochs. Per epoch, R7 is actually faster (about 173 s vs 255 s).
+- **Timing:** free-tier Colab speed varies by about 20% between sessions. R7 trains in about 58 min per run, R1 in about 23 min. R7 takes longer because it runs the full 20 epochs: with only 59k trainable weights it keeps improving until epochs 14-17 and does not overfit. R1 trains all 9.8M weights on 414 training photos, a large number of parameters for a dataset this size. Its validation Dice peaks at epochs 0-3 and then drops (it overfits), so early stopping ends it after 4-7 epochs. Per epoch, R7 is actually faster (about 173 s vs 255 s).
 
   ![Validation Dice per epoch for R1 and R7, 3 seeds each](figures/fig4_training_curves.png)
 
